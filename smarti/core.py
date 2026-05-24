@@ -11,6 +11,7 @@ class SmartiCore:
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
         _CURRENT_SETTINGS_REF["settings"] = self.settings
+        self._sync_ssl_compat_env()
         if self._normalize_autonomy_profile_settings():
             self._save_settings()
         self.installed_apps_cache = None
@@ -184,10 +185,29 @@ class SmartiCore:
 
     def _automation_browser_is_ready(self):
         try:
-            res = requests.get(self._automation_browser_endpoint(), timeout=0.7)
+            res = self._request_get(self._automation_browser_endpoint(), timeout=0.7)
             return res.ok
         except Exception:
             return False
+
+    def _automation_browser_ssl_mode_matches(self):
+        try:
+            profile_dir = self._automation_browser_profile_dir().replace("'", "''")
+            ps = (
+                f"$profile = '{profile_dir}'; "
+                f"$port = '{SMARTI_BROWSER_DEBUG_PORT}'; "
+                "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                "Where-Object { ($_.CommandLine -like \"*--remote-debugging-port=$port*\") -or ($_.CommandLine -like \"*--user-data-dir=$profile*\") } | "
+                "Select-Object -First 1 -ExpandProperty CommandLine"
+            )
+            completed = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=5, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
+            command_line = (completed.stdout or "").lower()
+            if not command_line:
+                return True
+            has_insecure_flag = "--ignore-certificate-errors" in command_line
+            return has_insecure_flag == self._allow_insecure_ssl()
+        except Exception:
+            return True
 
     def _chrome_executable(self):
         candidates = [
@@ -204,7 +224,7 @@ class SmartiCore:
 
     def _automation_browser_args(self, initial_url="about:blank"):
         profile_dir = self._automation_browser_profile_dir()
-        return [
+        args = [
             self._chrome_executable(),
             f"--remote-debugging-port={SMARTI_BROWSER_DEBUG_PORT}",
             f"--user-data-dir={profile_dir}",
@@ -213,12 +233,21 @@ class SmartiCore:
             "--no-default-browser-check",
             "--disable-blink-features=AutomationControlled",
             "--disable-popup-blocking",
-            initial_url or "about:blank",
         ]
+        if self._allow_insecure_ssl():
+            args.extend([
+                "--ignore-certificate-errors",
+                "--allow-running-insecure-content",
+                "--test-type",
+            ])
+        args.append(initial_url or "about:blank")
+        return args
 
     def _ensure_automation_browser(self, initial_url="about:blank"):
         if self._automation_browser_is_ready():
-            return True, None
+            if self._automation_browser_ssl_mode_matches():
+                return True, None
+            self._close_automation_browser()
         chrome = self._chrome_executable()
         if not chrome:
             return False, "ERROR: Chrome was not found. Install Google Chrome to use browser automation."
@@ -226,7 +255,7 @@ class SmartiCore:
         try:
             os.makedirs(profile_dir, exist_ok=True)
             args = self._automation_browser_args(initial_url)
-            self.browser_process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=WIN_CREATE_NO_WINDOW)
+            self.browser_process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             deadline = time.time() + 12
             while time.time() < deadline:
                 if self._automation_browser_is_ready():
@@ -266,7 +295,7 @@ class SmartiCore:
             return f"SUCCESS: Opened in Smarti browser: {url}{suffix}"
         except Exception as e:
             try:
-                subprocess.Popen(self._automation_browser_args(url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=WIN_CREATE_NO_WINDOW)
+                subprocess.Popen(self._automation_browser_args(url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
                 return f"SUCCESS: Opened in Smarti browser: {url}"
             except Exception:
                 return f"ERROR: Failed to navigate Smarti browser: {e}"
@@ -285,7 +314,7 @@ class SmartiCore:
             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
         )
         try:
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10, creationflags=WIN_CREATE_NO_WINDOW)
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             return "SUCCESS: Smarti browser closed."
         except Exception as e:
             return f"ERROR: Failed to close Smarti browser: {e}"
@@ -331,6 +360,7 @@ class SmartiCore:
                 subprocess.run(
                     ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                     capture_output=True, text=True, timeout=5,
+                    env=self._subprocess_env(),
                     creationflags=WIN_CREATE_NO_WINDOW
                 )
             else:
@@ -349,13 +379,14 @@ class SmartiCore:
 
     def _run_cancelable_subprocess(self, args, *, input=None, timeout=None, cwd=None, env=None, text=True, encoding="utf-8", errors="replace", creationflags=WIN_CREATE_NO_WINDOW):
         self._raise_if_cancelled()
+        proc_env = self._subprocess_env(env)
         proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE if input is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
-            env=env,
+            env=proc_env,
             text=text,
             encoding=encoding if text else None,
             errors=errors if text else None,
@@ -1562,8 +1593,52 @@ class SmartiCore:
             except Exception: pass
         return allowed or [APP_DIR]
 
+    def _allow_insecure_ssl(self):
+        return bool(self.settings.get("allow_insecure_ssl_compat", False))
+
+    def _add_ssl_sitecustomize_path(self, env):
+        existing = env.get("PYTHONPATH", "")
+        parts = [p for p in str(existing).split(os.pathsep) if p]
+        app_dir_norm = os.path.normcase(os.path.abspath(APP_DIR))
+        if not any(os.path.normcase(os.path.abspath(p)) == app_dir_norm for p in parts):
+            parts.insert(0, APP_DIR)
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+        return env
+
+    def _sync_ssl_compat_env(self, env=None):
+        apply_insecure_ssl_compat()
+        target = os.environ if env is None else dict(env)
+        enabled = self._allow_insecure_ssl()
+        enabled_values = {
+            "SMARTI_ALLOW_INSECURE_SSL": "1",
+            "PYTHONHTTPSVERIFY": "0",
+            "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+            "npm_config_strict_ssl": "false",
+            "GIT_SSL_NO_VERIFY": "true",
+            "CURL_SSL_NO_REVOKE": "1",
+            "YARN_ENABLE_STRICT_SSL": "false",
+            "PNPM_CONFIG_STRICT_SSL": "false",
+            "PIP_TRUSTED_HOST": "pypi.org files.pythonhosted.org pypi.python.org",
+            "UV_SYSTEM_CERTS": "true",
+            "UV_NATIVE_TLS": "true",
+        }
+        if enabled:
+            for key, value in enabled_values.items():
+                target[key] = value
+            self._add_ssl_sitecustomize_path(target)
+        else:
+            target["SMARTI_ALLOW_INSECURE_SSL"] = "0"
+            for key, value in enabled_values.items():
+                if key != "SMARTI_ALLOW_INSECURE_SSL" and target.get(key) == value:
+                    target.pop(key, None)
+        return target
+
+    def _subprocess_env(self, env=None):
+        return self._sync_ssl_compat_env(os.environ.copy() if env is None else env)
+
     def _ssl_request_kwargs(self):
-        if self.settings.get("allow_insecure_ssl_compat", False):
+        self._sync_ssl_compat_env()
+        if self._allow_insecure_ssl():
             try:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             except Exception:
@@ -1571,8 +1646,19 @@ class SmartiCore:
             return {"verify": False}
         return {}
 
+    def _with_ssl_request_kwargs(self, kwargs):
+        merged = dict(kwargs or {})
+        merged.update(self._ssl_request_kwargs())
+        return merged
+
+    def _request_get(self, url, **kwargs):
+        return requests.get(url, **self._with_ssl_request_kwargs(kwargs))
+
+    def _request_post(self, url, **kwargs):
+        return requests.post(url, **self._with_ssl_request_kwargs(kwargs))
+
     def _friendly_ssl_error(self, error):
-        if self.settings.get("allow_insecure_ssl_compat", False):
+        if self._allow_insecure_ssl():
             return (
                 "שגיאת SSL מול ספק ה-AI גם לאחר הפעלת מצב תאימות SSL. "
                 "זה בדרך כלל מצביע על סינון/פרוקסי/אנטי-וירוס שמחליף תעודות, או על תקלה זמנית בנתיב הרשת."
@@ -1594,13 +1680,7 @@ class SmartiCore:
         if self._sandbox_enabled():
             env["SMARTI_SANDBOX_ROOT"] = self._sandbox_root()
             env["SMARTI_SANDBOX_READ_OUTSIDE"] = "1" if self.settings.get("sandbox_allow_read_outside", False) else "0"
-        if self.settings.get("allow_insecure_ssl_compat", False):
-            env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-            env["npm_config_strict_ssl"] = "false"
-        else:
-            env.pop("NODE_TLS_REJECT_UNAUTHORIZED", None)
-            env.pop("npm_config_strict_ssl", None)
-        return env
+        return self._sync_ssl_compat_env(env)
 
     def _mcp_launch_args(self, pkg_name):
         configs = self.settings.get("mcp_package_configs", {})
@@ -2208,9 +2288,15 @@ class SmartiCore:
         if kind == "uv":
             if not self._binary_available("uv"):
                 return "", "ERROR: uv is required for this Skill install step but is not installed or not in PATH."
-            return f"uv tool install --system-certs {package}", None
+            ssl_flags = "--system-certs"
+            if self._allow_insecure_ssl():
+                ssl_flags += " --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org --allow-insecure-host pypi.python.org"
+            return f"uv {ssl_flags} tool install {package}", None
         if kind in {"pip", "python"}:
-            return f"{json.dumps(self._python_executable())} -m pip install {package}", None
+            ssl_flags = ""
+            if self._allow_insecure_ssl():
+                ssl_flags = " --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org"
+            return f"{json.dumps(self._python_executable())} -m pip install{ssl_flags} {package}", None
         return "", f"ERROR: Unsupported Skill install method: {kind or 'unknown'}"
 
     def install_skill_requirements(self, name, reason=""):
@@ -2247,7 +2333,7 @@ class SmartiCore:
 
     def _clawhub_get_json(self, path, params=None):
         url = get_url(URL_CLAWHUB_API) + path
-        res = self._run_cancelable_callable(lambda: requests.get(url, params=params or {}, timeout=25))
+        res = self._run_cancelable_callable(lambda: self._request_get(url, params=params or {}, timeout=25))
         if res.status_code == 429:
             return {"error": f"Rate limited. נסה שוב בעוד {res.headers.get('Retry-After', 'מספר')} שניות."}
         res.raise_for_status()
@@ -2361,7 +2447,7 @@ class SmartiCore:
             return f"ERROR: לא ניתן להשלים בדיקת סריקה של ClawHub עבור ה-Skill הזה: {e}"
         try:
             url = get_url(URL_CLAWHUB_API) + "/download"
-            res = self._run_cancelable_callable(lambda: requests.get(url, params={"slug": slug, "tag": "latest"}, timeout=45))
+            res = self._run_cancelable_callable(lambda: self._request_get(url, params={"slug": slug, "tag": "latest"}, timeout=45))
             if res.status_code == 429:
                 return f"ERROR: ClawHub rate limit. נסה שוב בעוד {res.headers.get('Retry-After', 'מספר')} שניות."
             res.raise_for_status()
@@ -2554,6 +2640,7 @@ class SmartiCore:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=spec.get("path") or APP_DIR,
+            env=self._subprocess_env(),
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -2833,6 +2920,7 @@ class SmartiCore:
         return self._format_software_records(records, include_paths=include_paths, output_format=output_format)
 
     def setup_model(self):
+        self._sync_ssl_compat_env()
         self.mode = self.settings.get("api_mode", "gemini")
         if self.mode == "gemini":
             self.gemini_history = []
@@ -2849,7 +2937,14 @@ class SmartiCore:
             url = base_urls.get(self.mode)
             key = api_keys.get(self.mode)
             self._universal_client_key = key if key else "dummy"
-            self.universal_client = OpenAI(base_url=url, api_key=key if key else "dummy", timeout=120.0)
+            client_kwargs = {"base_url": url, "api_key": key if key else "dummy", "timeout": 120.0}
+            if self._allow_insecure_ssl() and (self.mode != "local" or str(url or "").lower().startswith("https://")):
+                try:
+                    import httpx
+                    client_kwargs["http_client"] = httpx.Client(verify=False, timeout=120.0)
+                except Exception:
+                    pass
+            self.universal_client = OpenAI(**client_kwargs)
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
         elif self.mode == "anthropic":
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
@@ -2882,6 +2977,7 @@ class SmartiCore:
         if manager:
             self.settings = manager.sync_legacy_aliases(self.settings)
         _CURRENT_SETTINGS_REF["settings"] = self.settings
+        self._sync_ssl_compat_env()
         data = copy.deepcopy(self.settings)
         data.pop("_runtime_trace", None)
         keyring_mod = get_keyring_module()
@@ -3292,12 +3388,11 @@ CWD: {current_dir}
                         "generationConfig": {"temperature": 0.7}
                     }
                     response = self._run_cancelable_callable(
-                        lambda: requests.post(
+                        lambda: self._request_post(
                             url,
                             json=payload,
                             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                            timeout=120,
-                            **self._ssl_request_kwargs()
+                            timeout=120
                         )
                     )
                     if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
@@ -3333,7 +3428,7 @@ CWD: {current_dir}
                     system_text = self.system_prompt + (f"\n\n{extra_system}" if extra_system else "")
                     payload = {"model": current_model, "system": system_text, "messages": [m for m in current_messages if m["role"] != "system"], "max_tokens": 4096, "temperature": 0.7}
                     response = self._run_cancelable_callable(
-                        lambda: requests.post(url, json=payload, headers=headers, timeout=120, **self._ssl_request_kwargs())
+                        lambda: self._request_post(url, json=payload, headers=headers, timeout=120)
                     )
                     if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
                     response.raise_for_status()
@@ -5184,7 +5279,7 @@ else:
             elif action == "set_volume":
                 allowed, err = self._ensure_capability_allowed("audio", "אישור שינוי שמע", str(args_dict.get('action', '')), risk="low")
                 if not allowed: return (err, None)
-                subprocess.Popen(["powershell", "-Command", f"Set-Volume -Mute {'$true' if str(args_dict.get('action', '')).upper()=='MUTE' else '$false'}"], creationflags=WIN_CREATE_NO_WINDOW)
+                subprocess.Popen(["powershell", "-Command", f"Set-Volume -Mute {'$true' if str(args_dict.get('action', '')).upper()=='MUTE' else '$false'}"], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
                 return ("SUCCESS: ווליום עודכן.", None)
             elif action == "open_in_browser":
                 allowed, err = self._ensure_capability_allowed("browser_open", "אישור פתיחה בדפדפן", str(args_dict.get("query_or_url", "")), risk="low")
@@ -5320,7 +5415,7 @@ else:
         params = params or {}
         headers = headers or {}
         try:
-            res = self._run_cancelable_callable(lambda: requests.get(url, params=params, headers=headers, timeout=timeout))
+            res = self._run_cancelable_callable(lambda: self._request_get(url, params=params, headers=headers, timeout=timeout))
             res.raise_for_status()
             return res.json()
         except SmartiCancelled:
@@ -5328,6 +5423,8 @@ else:
         except Exception as first_error:
             prepared = requests.Request("GET", url, params=params, headers=headers).prepare()
             curl_cmd = ["curl.exe", "-L", "-sS", "--max-time", str(int(timeout)), prepared.url]
+            if self._allow_insecure_ssl():
+                curl_cmd[1:1] = ["-k"]
             user_agent = headers.get("User-Agent") or headers.get("user-agent")
             if user_agent:
                 curl_cmd[1:1] = ["-A", user_agent]
@@ -5504,7 +5601,7 @@ else:
             return "ERROR: Empty GUI command."
         exe = tokens[0].strip("\"'")
         args = [t.strip("\"'") for t in tokens[1:]]
-        subprocess.Popen([exe] + args, creationflags=WIN_CREATE_NO_WINDOW)
+        subprocess.Popen([exe] + args, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
         return f"SUCCESS: הופעל יישום GUI בלי להמתין לסגירתו: {exe}"
 
     def run_system_command(self, params, cwd=None, timeout_seconds=None):
@@ -5525,12 +5622,17 @@ else:
                 return f"ERROR: Failed to launch GUI app: {e}"
         if re.match(r'(?i)^\s*curl\s+', cmd):
             cmd = re.sub(r'(?i)^\s*curl\s+', 'curl.exe ', cmd, count=1)
+        if self._allow_insecure_ssl() and re.match(r'(?i)^\s*curl(?:\.exe)?\s+', cmd) and not re.search(r'(?i)(^|\s)(-k|--insecure)(\s|$)', cmd):
+            cmd = re.sub(r'(?i)^\s*curl(?:\.exe)?\s+', 'curl.exe -k ', cmd, count=1)
         try:
             timeout = max(5, int(timeout_seconds)) if timeout_seconds not in (None, "") else self._timeout("command_timeout_seconds", 60)
         except Exception:
             timeout = self._timeout("command_timeout_seconds", 60)
         try:
-            ps_cmd = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [System.Text.UTF8Encoding]::new(); " + cmd
+            ps_prefix = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+            if self._allow_insecure_ssl():
+                ps_prefix += "[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }; "
+            ps_cmd = ps_prefix + cmd
             completed = self._run_cancelable_subprocess(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], cwd=working_dir, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=WIN_CREATE_NO_WINDOW)
             output, err = (completed.stdout or "").strip(), (completed.stderr or "").strip()
             body = [f"EXIT_CODE: {completed.returncode}"]
@@ -5709,11 +5811,27 @@ def main():
 
     env = os.environ.copy()
     if env.get("SMARTI_ALLOW_INSECURE_SSL") == "1":
+        env["PYTHONHTTPSVERIFY"] = "0"
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
         env["npm_config_strict_ssl"] = "false"
+        env["GIT_SSL_NO_VERIFY"] = "true"
+        env["CURL_SSL_NO_REVOKE"] = "1"
+        env["YARN_ENABLE_STRICT_SSL"] = "false"
+        env["PNPM_CONFIG_STRICT_SSL"] = "false"
+        env["PIP_TRUSTED_HOST"] = "pypi.org files.pythonhosted.org pypi.python.org"
+        env["UV_SYSTEM_CERTS"] = "true"
+        env["UV_NATIVE_TLS"] = "true"
     else:
+        env.pop("PYTHONHTTPSVERIFY", None)
         env.pop("NODE_TLS_REJECT_UNAUTHORIZED", None)
         env.pop("npm_config_strict_ssl", None)
+        env.pop("GIT_SSL_NO_VERIFY", None)
+        env.pop("CURL_SSL_NO_REVOKE", None)
+        env.pop("YARN_ENABLE_STRICT_SSL", None)
+        env.pop("PNPM_CONFIG_STRICT_SSL", None)
+        env.pop("PIP_TRUSTED_HOST", None)
+        env.pop("UV_SYSTEM_CERTS", None)
+        env.pop("UV_NATIVE_TLS", None)
 
     try:
         server_args = json.loads(env.get("MCP_SERVER_ARGS", "[]"))
@@ -5885,7 +6003,7 @@ if __name__ == "__main__":
         pkg_name = self._resolve_mcp_package(pkg_name)
         wrapper_path = self._write_mcp_wrapper(pkg_name)
         env = self._mcp_env()
-        env["SMARTI_ALLOW_INSECURE_SSL"] = "1" if self.settings.get("allow_insecure_ssl_compat", False) else "0"
+        env["SMARTI_ALLOW_INSECURE_SSL"] = "1" if self._allow_insecure_ssl() else "0"
         env["MCP_SERVER_ARGS"] = json.dumps(self._mcp_launch_args(pkg_name), ensure_ascii=False)
         env["MCP_ARGS"] = json_args or "{}"
         args = [self._python_executable(), wrapper_path, pkg_name, cmd]
@@ -5904,7 +6022,7 @@ if __name__ == "__main__":
         query = str(query or "").strip()
         if not query: return "ERROR: Missing query."
         try:
-            res = self._run_cancelable_callable(lambda: requests.get(get_url(URL_NPM) + urllib.parse.quote(f"mcp {query}"), timeout=20))
+            res = self._run_cancelable_callable(lambda: self._request_get(get_url(URL_NPM) + urllib.parse.quote(f"mcp {query}"), timeout=20))
             res.raise_for_status()
             packages = res.json().get("objects", [])[:8]
             if not packages: return f"לא נמצאו חבילות MCP עבור: {query}"
@@ -5985,7 +6103,7 @@ if __name__ == "__main__":
         try:
             from bs4 import BeautifulSoup
             url = "https" + "://" + url if not url.startswith("http") else url
-            res = self._run_cancelable_callable(lambda: requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15))
+            res = self._run_cancelable_callable(lambda: self._request_get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15))
             res.raise_for_status()
             soup = BeautifulSoup(res.text, 'html.parser')
             for s in soup(["script", "style", "nav", "footer"]): s.extract()
@@ -6101,6 +6219,11 @@ if __name__ == "__main__":
             raise ValueError("Credentials missing. Set email address and app password in Smarti settings.")
         return cfg
 
+    def _email_ssl_context(self):
+        if self._allow_insecure_ssl():
+            return ssl._create_unverified_context()
+        return None
+
     def _email_mailbox_arg(self, mailbox):
         mailbox = str(mailbox or "INBOX").strip() or "INBOX"
         if mailbox.upper() == "INBOX":
@@ -6110,8 +6233,12 @@ if __name__ == "__main__":
     def _email_connect_imap(self):
         cfg = self._email_require_credentials()
         self._raise_if_cancelled()
+        context = self._email_ssl_context()
         if cfg["imap_ssl"]:
-            mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
+            if context:
+                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
+            else:
+                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
         else:
             mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
         mail.login(cfg["user"], cfg["password"])
@@ -6646,13 +6773,20 @@ if __name__ == "__main__":
         if not recipients:
             raise ValueError("No recipients resolved.")
         self._raise_if_cancelled()
+        context = self._email_ssl_context()
         if cfg["smtp_ssl"]:
-            server = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+            if context:
+                server = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
+            else:
+                server = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
         else:
             server = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
         try:
             if cfg["smtp_starttls"] and not cfg["smtp_ssl"]:
-                server.starttls()
+                if context:
+                    server.starttls(context=context)
+                else:
+                    server.starttls()
             server.login(cfg["user"], cfg["password"])
             server.send_message(msg, from_addr=cfg["user"], to_addrs=recipients)
         finally:
@@ -6964,7 +7098,7 @@ if __name__ == "__main__":
         api = self._ensure_secret_loaded("tavily_api_key")
         if not api: return "ERROR: Tavily key missing."
         try:
-            res = self._run_cancelable_callable(lambda: requests.post(get_url(URL_TAVILY), json={"api_key": api, "query": query, "include_answer": "advanced"}, timeout=20))
+            res = self._run_cancelable_callable(lambda: self._request_post(get_url(URL_TAVILY), json={"api_key": api, "query": query, "include_answer": "advanced"}, timeout=20))
             res.raise_for_status()
             d = res.json()
             return "[UNTRUSTED_WEB_CONTENT]\n" + d.get("answer", "") + "\nURLs:\n" + "\n".join([r.get('url') for r in d.get("results", [])])
@@ -7076,12 +7210,12 @@ if __name__ == "__main__":
             ext = os.path.splitext(direct_path)[1].lower()
             if ext and ext not in EXECUTABLE_OPEN_EXTENSIONS and ext != ".exe":
                 return "ERROR: software_manager opens applications only. Use file_manager action=open for files/folders."
-            subprocess.Popen([direct_path], creationflags=WIN_CREATE_NO_WINDOW)
+            subprocess.Popen([direct_path], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             return f"SUCCESS: Opened application path: {direct_path}"
 
         resolved = shutil.which(query)
         if resolved:
-            subprocess.Popen([resolved], creationflags=WIN_CREATE_NO_WINDOW)
+            subprocess.Popen([resolved], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             return f"SUCCESS: Opened command: {resolved}"
 
         matches = self._find_software_matches(query, limit=8, refresh=False)
@@ -7099,11 +7233,11 @@ if __name__ == "__main__":
         launch_type = best.get("launch_type", "path")
         try:
             if launch_type == "appx":
-                subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{launch}"], creationflags=WIN_CREATE_NO_WINDOW)
+                subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{launch}"], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             elif launch_type == "shortcut" or launch.lower().endswith(".lnk"):
-                subprocess.Popen(["explorer.exe", launch], creationflags=WIN_CREATE_NO_WINDOW)
+                subprocess.Popen(["explorer.exe", launch], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             else:
-                subprocess.Popen([launch], creationflags=WIN_CREATE_NO_WINDOW)
+                subprocess.Popen([launch], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             return f"SUCCESS: Opened {best.get('name')} via {best.get('source')}."
         except Exception as e:
             suggestions = ", ".join(item["name"] for item in matches[:6])

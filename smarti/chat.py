@@ -15,6 +15,8 @@ def _asset_icon(*filenames):
     return QIcon()
 
 class PillInputFrame(QFrame):
+    CORNER_RADIUS = 40.5
+
     def __init__(self):
         super().__init__()
         self.setObjectName("InputFrame")
@@ -39,7 +41,7 @@ class PillInputFrame(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        radius = rect.height() / 2.0
+        radius = min(self.CORNER_RADIUS, rect.height() / 2.0, rect.width() / 2.0)
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
 
@@ -56,6 +58,22 @@ class PillInputFrame(QFrame):
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(path)
         painter.end()
+
+class PinnedActionButtonHost(QWidget):
+    BOTTOM_GAP = 7
+
+    def __init__(self, button):
+        super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setFixedWidth(button.width())
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, self.BOTTOM_GAP)
+        layout.setSpacing(0)
+        layout.addStretch(1)
+        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
 
 class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, parent_width=450):
@@ -631,6 +649,7 @@ class ChatWindow(QMainWindow):
             f"QTextEdit {{ background-color: transparent; color: {FIELD_TEXT_COLOR}; border: none; "
             f"padding: 4px 10px; font-size: 17px; font-family: 'Segoe UI'; outline: none; text-align: left; }}"
             f"QTextEdit viewport {{ background-color: transparent; border: none; }}"
+            f"{SCROLLBAR_CSS}"
         )
 
     def refresh_themed_icons(self):
@@ -837,7 +856,8 @@ class ChatWindow(QMainWindow):
         
         self.refresh_themed_icons()
         self.update_action_btn_visuals()
-        input_frame_layout.insertWidget(0, self.action_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.action_btn_host = PinnedActionButtonHost(self.action_btn)
+        input_frame_layout.insertWidget(0, self.action_btn_host, 0)
         
         # Keep the action button visually on the left even inside the RTL chat.
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)

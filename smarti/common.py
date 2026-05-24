@@ -39,9 +39,12 @@ import winsound
 import tempfile
 import uuid
 import ctypes
+import ssl
 from datetime import datetime, timedelta
 from pathlib import Path
 import urllib3
+
+from .ssl_compat import apply_insecure_ssl_compat
 
 LITELLM_INSTALLED = importlib.util.find_spec("litellm") is not None
 KEYRING_INSTALLED = importlib.util.find_spec("keyring") is not None

@@ -118,7 +118,7 @@ class FetchModelsWorker(QThread):
                 res = requests.get(get_url(URL_GROQ_MODELS), headers={"Authorization": f"Bearer {self.api_key}"}, timeout=10, **self._request_kwargs())
                 if res.status_code == 200: models = [m['id'] for m in res.json().get('data', [])]
             elif self.provider == "local":
-                res = requests.get(f"{self.url}/models", timeout=5)
+                res = requests.get(f"{self.url}/models", timeout=5, **self._request_kwargs())
                 if res.status_code == 200: models = [m['id'] for m in res.json().get('data', [])]
         except Exception: pass
         self.finished_signal.emit(models)
