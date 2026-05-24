@@ -2,28 +2,73 @@
 
 עברית: [מעבר לגרסה העברית](#עברית)
 
-SmartiAI Agent for Windows is a desktop AI assistant for Windows. It combines a clean Hebrew-first chat interface with practical local tools for files, system tasks, web access, email, automation, memory, and extensibility. The project is designed for everyday desktop work, with explicit permission controls around sensitive actions.
+SmartiAI Agent for Windows is a desktop AI agent built for practical work on a Windows computer. It is more than a chat window: Smarti can plan tasks, use local tools, inspect files, work with the web, automate browser and desktop actions, manage email, remember useful context, and ask for approval before sensitive operations.
 
-## Highlights
+The goal is simple: give the user a capable assistant that can help operate the computer while staying transparent, configurable, and under the user's control.
 
-- Native Windows desktop app built with PyQt6, including a polished chat window, tray notifications, splash screen, light/dark/auto themes, and right-to-left Hebrew support.
-- Model support for Gemini, OpenAI, Anthropic, OpenRouter, Groq, and local OpenAI-compatible servers such as LM Studio.
-- Multi-step agent workflow with visible action steps, cancellable runs, conversation context, and a final response verification pass.
-- Controlled system tools for PowerShell commands, project checks, read-only Git status/diff/log/show, process listing, clipboard updates, and audio mute/unmute.
-- File tools for safe opening, text-file creation, local document reading, filename search, content search, screenshot saving, and optional OCR.
-- Web tools for internet search, webpage reading, browser opening, and weather forecasts through open services.
-- Browser automation through a dedicated Chrome profile and Selenium, including page-state extraction and interactive element discovery.
-- Windows desktop automation through Microsoft UI Automation, with a controlled keyboard/mouse fallback when needed.
-- IMAP/SMTP email support for searching, reading, sending, drafts, replies, forwarding, flags, archive, delete, folders, and attachments.
-- Local structured memory with user, short-term, long-term, and tool memories, including TTL, relevance search, and Markdown export.
-- Background tasks for scheduled one-time or repeated work, with task listing, cancellation, and retry.
-- Extension support through custom Python tools, MCP packages installed through NPM, and beta Skills.
-- Safety and privacy controls including permission levels, per-capability policy settings, approval prompts, optional sandboxing, audit logs, log redaction, and secret storage through Keyring or Windows DPAPI.
-- Management screens for model settings, permissions, tools, background tasks, usage statistics, estimated costs, developer trace, logs, and about information.
+## What Smarti Can Do
+
+- Understand a request, break it into steps, choose the right tools, run the work, and show intermediate action steps.
+- Work with local files and folders: open safe files, create text files, read documents, search by filename, search inside text/code, and extract text from images when OCR is configured.
+- Use the web: search the internet, read specific webpages, open links in the browser, and fetch weather forecasts.
+- Control Windows in a structured way: list/open installed apps, inspect UI elements, click buttons, set text fields, send hotkeys, update the clipboard, and manage audio mute state.
+- Automate a dedicated Chrome browser session with Selenium, including page inspection, form interaction, navigation, and extraction of visible page state.
+- Manage email through IMAP/SMTP: search, read, draft, send, reply, forward, archive, move, delete, manage folders, and save attachments.
+- Run controlled system and developer tasks: PowerShell commands with approval, read-only Git operations, project test/build commands, and process listing.
+- Schedule background work, list running or pending tasks, cancel tasks, and retry previous tasks.
+- Remember useful context locally, with separate user, short-term, long-term, and tool memories.
+- Extend itself with custom Python tools, MCP packages, and beta Skills.
+
+## Example Use Cases
+
+- "Find the latest invoice PDF in Downloads, summarize it, and save the summary as a text file."
+- "Search this project for where browser automation is implemented."
+- "Open Chrome, go to a site, fill a form, and tell me what happened."
+- "Check my inbox for unread messages from a client and draft a reply."
+- "Run the project tests and summarize any failures."
+- "Take a screenshot and explain what is visible on the screen."
+- "Remind me in 30 minutes to continue this task."
+- "Create a reusable Python tool for processing this type of file."
+- "Search the web for current information, then open the most relevant result."
+- "Remember that I prefer concise Hebrew answers for this project."
+
+## Built-In Tool Areas
+
+| Area | What it is used for |
+| --- | --- |
+| System | PowerShell commands, project checks, Git status/diff/log/show, process listing, clipboard, audio mute/unmute. |
+| Software | Discovering installed apps, finding the best app match, and opening software. |
+| Files | Opening files/folders, saving text, reading documents, searching filenames, searching content, and OCR. |
+| Web | Internet search, webpage reading, browser opening, and weather. |
+| Screen | Capturing screenshots, saving screenshots, and analyzing local images. |
+| Automation | Browser automation through Selenium and desktop automation through Windows UI Automation. |
+| Email | IMAP/SMTP search, read, send, draft, reply, forward, labels/folders, attachments, archive, and delete. |
+| Memory | Local context storage, search, update, expiry, and Markdown export. |
+| Background Tasks | One-time and repeating scheduled work, task list, cancel, and retry. |
+| Extensions | Custom Python tools, MCP packages, and beta Skills. |
+
+## Safety and Control
+
+Smarti is designed to be useful without being careless. Sensitive capabilities are gated by settings and approval prompts. You can configure permission levels, enable or disable tool groups, require approval for shell commands and extension installs, use optional sandboxing, redact logs, and store secrets through Keyring or Windows DPAPI.
+
+Actions such as writing files, running commands, controlling the desktop, reading email, sending email, using screenshots, or uploading local content to a cloud model are treated as sensitive and can require explicit user approval.
+
+## Model Support
+
+Smarti can work with several model providers:
+
+- Gemini
+- OpenAI
+- Anthropic
+- OpenRouter
+- Groq
+- Local OpenAI-compatible servers, such as LM Studio
+
+Model keys and local server settings are configured from the app settings screen.
 
 ## Quick Start
 
-Requirements: Windows, Python 3.10 or newer, and Git if you want to use the Git tools.
+Requirements: Windows, Python 3.10 or newer, and Git if you want to use Git tools.
 
 ```powershell
 python -m venv .venv
@@ -38,14 +83,6 @@ To run without a console window, open `smarti_core.pyw` directly from Windows or
 ```powershell
 pythonw smarti_core.pyw
 ```
-
-## First-Time Setup
-
-1. Open the settings screen from the app menu.
-2. Choose a model provider: Gemini, OpenAI, Anthropic, OpenRouter, Groq, or Local.
-3. Enter the relevant API key or local server URL.
-4. Configure permissions, system tools, automations, email, MCP/Skills, and the output folder.
-5. For sensitive actions, Smarti asks for approval before running commands, writing files, uploading content to a cloud model, using email, or controlling the computer.
 
 ## Optional Capabilities
 
@@ -86,24 +123,69 @@ This project is distributed under the license included in `LICENSE`.
 
 ## עברית
 
-SmartiAI Agent for Windows הוא עוזר AI שולחני ל-Windows. הוא משלב ממשק צ'אט נקי שמותאם לעברית עם כלים מעשיים לעבודה מקומית: קבצים, משימות מערכת, אינטרנט, אימייל, אוטומציה, זיכרון והרחבות. הפרויקט מיועד לעבודה יומיומית על המחשב, עם בקרת הרשאות מפורשת סביב פעולות רגישות.
+SmartiAI Agent for Windows הוא סוכן AI שולחני שנועד לעבודה מעשית על מחשב Windows. הוא לא רק חלון צ'אט: Smarti יכול לתכנן משימות, להשתמש בכלים מקומיים, לבדוק קבצים, לעבוד עם האינטרנט, לבצע אוטומציה בדפדפן ובשולחן העבודה, לנהל אימייל, לזכור הקשר שימושי ולבקש אישור לפני פעולות רגישות.
 
-## נקודות עיקריות
+המטרה פשוטה: לתת למשתמש עוזר חזק שיכול לעזור להפעיל את המחשב, תוך שקיפות, אפשרות הגדרה ושליטה מלאה של המשתמש.
 
-- אפליקציית Windows מקומית שנבנתה עם PyQt6, כולל חלון צ'אט מלוטש, התראות מגש מערכת, מסך פתיחה, מצבי תצוגה בהיר/כהה/אוטומטי ותמיכה בעברית מימין לשמאל.
-- תמיכה במודלים דרך Gemini, OpenAI, Anthropic, OpenRouter, Groq ושרתים מקומיים תואמי OpenAI כמו LM Studio.
-- תהליך עבודה מרובה שלבים לסוכן, עם שלבי פעולה גלויים, אפשרות לעצור ריצה, הקשר שיחה ואימות סופי של התשובה.
-- כלי מערכת מבוקרים לפקודות PowerShell, בדיקות פרויקט, פעולות Git לקריאה בלבד כגון status/diff/log/show, רשימת תהליכים, עדכון לוח העתקה והשתקה/ביטול השתקה של שמע.
-- כלי קבצים לפתיחה בטוחה, יצירת קובצי טקסט, קריאת מסמכים מקומיים, חיפוש לפי שם קובץ, חיפוש בתוך תוכן, שמירת צילומי מסך ו-OCR אופציונלי.
-- כלי אינטרנט לחיפוש ברשת, קריאת דפי אתר, פתיחה בדפדפן ותחזית מזג אוויר דרך שירותים פתוחים.
-- אוטומציית דפדפן דרך פרופיל Chrome ייעודי ו-Selenium, כולל חילוץ מצב הדף וזיהוי אלמנטים אינטראקטיביים.
-- אוטומציית שולחן עבודה של Windows דרך Microsoft UI Automation, עם fallback מבוקר למקלדת/עכבר בעת הצורך.
-- תמיכה באימייל דרך IMAP/SMTP לחיפוש, קריאה, שליחה, טיוטות, מענה, העברה, סימונים, ארכוב, מחיקה, תיקיות וקבצים מצורפים.
-- זיכרון מקומי מובנה עם זיכרונות משתמש, טווח קצר, טווח ארוך וכלים, כולל TTL, חיפוש לפי רלוונטיות וייצוא ל-Markdown.
-- משימות רקע לעבודה מתוזמנת חד-פעמית או חוזרת, עם הצגת משימות, ביטול והרצה מחדש.
-- תמיכה בהרחבות דרך כלי Python מותאמים אישית, חבילות MCP שמותקנות דרך NPM, ושכבת Skills בגרסת בטא.
-- בקרות אבטחה ופרטיות הכוללות רמות הרשאה, מדיניות לפי יכולת, בקשות אישור, ארגז חול אופציונלי, לוג Audit, הסתרת מידע רגיש בלוגים ושמירת סודות דרך Keyring או Windows DPAPI.
-- מסכי ניהול להגדרות מודלים, הרשאות, כלים, משימות רקע, נתוני שימוש, עלויות משוערות, Developer Trace, לוגים ומידע אודות.
+## מה Smarti יודע לעשות
+
+- להבין בקשה, לפרק אותה לשלבים, לבחור את הכלים המתאימים, לבצע את העבודה ולהציג שלבי פעולה תוך כדי.
+- לעבוד עם קבצים ותיקיות מקומיים: לפתוח קבצים בטוחים, ליצור קבצי טקסט, לקרוא מסמכים, לחפש לפי שם קובץ, לחפש בתוך טקסט/קוד ולחלץ טקסט מתמונות כאשר OCR מוגדר.
+- להשתמש באינטרנט: לחפש ברשת, לקרוא דפי אתר מסוימים, לפתוח קישורים בדפדפן ולקבל תחזית מזג אוויר.
+- לשלוט ב-Windows בצורה מובנית: להציג/לפתוח תוכנות מותקנות, לבדוק רכיבי ממשק, ללחוץ על כפתורים, למלא שדות טקסט, לשלוח קיצורי מקשים, לעדכן את לוח ההעתקה ולנהל מצב השתקת שמע.
+- לבצע אוטומציה בסשן Chrome ייעודי באמצעות Selenium, כולל בדיקת מצב הדף, עבודה עם טפסים, ניווט וחילוץ מידע גלוי מהעמוד.
+- לנהל אימייל דרך IMAP/SMTP: לחפש, לקרוא, לכתוב טיוטות, לשלוח, להשיב, להעביר, לארכב, להעביר תיקייה, למחוק, לנהל תיקיות ולשמור קבצים מצורפים.
+- להריץ משימות מערכת ופיתוח מבוקרות: פקודות PowerShell עם אישור, פעולות Git לקריאה בלבד, פקודות test/build לפרויקט ורשימת תהליכים.
+- לתזמן עבודה ברקע, להציג משימות פעילות או מתוכננות, לבטל משימות ולהריץ מחדש משימות קודמות.
+- לזכור הקשר שימושי באופן מקומי, עם זיכרונות משתמש, טווח קצר, טווח ארוך וזיכרונות כלים.
+- להתרחב בעזרת כלי Python מותאמים אישית, חבילות MCP ו-Skills בגרסת בטא.
+
+## מקרי שימוש לדוגמה
+
+- "מצא את קובץ החשבונית האחרון בתיקיית Downloads, סכם אותו ושמור את הסיכום כקובץ טקסט."
+- "חפש בפרויקט הזה איפה ממומשת אוטומציית הדפדפן."
+- "פתח את Chrome, עבור לאתר, מלא טופס וספר לי מה קרה."
+- "בדוק בתיבת המייל הודעות שלא נקראו מלקוח וכתוב טיוטת תשובה."
+- "הרץ את בדיקות הפרויקט וסכם את השגיאות אם יש."
+- "צלם את המסך והסבר מה רואים בו."
+- "הזכר לי בעוד 30 דקות להמשיך את המשימה הזו."
+- "צור כלי Python רב-פעמי לעיבוד קבצים מהסוג הזה."
+- "חפש ברשת מידע עדכני ואז פתח את התוצאה הכי רלוונטית."
+- "זכור שאני מעדיף תשובות עבריות קצרות בפרויקט הזה."
+
+## אזורי כלים מובנים
+
+| תחום | למה הוא משמש |
+| --- | --- |
+| מערכת | פקודות PowerShell, בדיקות פרויקט, Git status/diff/log/show, רשימת תהליכים, לוח העתקה והשתקה/ביטול השתקה. |
+| תוכנות | גילוי תוכנות מותקנות, מציאת התאמה טובה לשם תוכנה ופתיחת תוכנות. |
+| קבצים | פתיחת קבצים/תיקיות, שמירת טקסט, קריאת מסמכים, חיפוש שמות קבצים, חיפוש תוכן ו-OCR. |
+| אינטרנט | חיפוש ברשת, קריאת דפי אתר, פתיחה בדפדפן ומזג אוויר. |
+| מסך | צילום מסך, שמירת צילום מסך וניתוח תמונות מקומיות. |
+| אוטומציה | אוטומציית דפדפן דרך Selenium ואוטומציית שולחן עבודה דרך Windows UI Automation. |
+| אימייל | חיפוש, קריאה, שליחה, טיוטות, תשובות, העברה, תוויות/תיקיות, קבצים מצורפים, ארכוב ומחיקה דרך IMAP/SMTP. |
+| זיכרון | שמירת הקשר מקומי, חיפוש, עדכון, תפוגה וייצוא ל-Markdown. |
+| משימות רקע | עבודה מתוזמנת חד-פעמית או חוזרת, רשימת משימות, ביטול והרצה מחדש. |
+| הרחבות | כלי Python מותאמים, חבילות MCP ו-Skills בגרסת בטא. |
+
+## בטיחות ושליטה
+
+Smarti נבנה כך שיהיה שימושי בלי להיות פזיז. יכולות רגישות נשלטות דרך הגדרות ובקשות אישור. אפשר להגדיר רמות הרשאה, להפעיל או לכבות קבוצות כלים, לדרוש אישור לפקודות shell ולהתקנת הרחבות, להשתמש בארגז חול אופציונלי, לטשטש מידע בלוגים ולשמור סודות דרך Keyring או Windows DPAPI.
+
+פעולות כמו כתיבת קבצים, הרצת פקודות, שליטה בשולחן העבודה, קריאת אימייל, שליחת אימייל, שימוש בצילומי מסך או העלאת תוכן מקומי למודל בענן נחשבות רגישות ויכולות לדרוש אישור מפורש מהמשתמש.
+
+## תמיכה במודלים
+
+Smarti יכול לעבוד עם כמה ספקי מודלים:
+
+- Gemini
+- OpenAI
+- Anthropic
+- OpenRouter
+- Groq
+- שרתים מקומיים תואמי OpenAI, כמו LM Studio
+
+מפתחות מודל והגדרות שרת מקומי מוגדרים מתוך מסך ההגדרות באפליקציה.
 
 ## התחלה מהירה
 
@@ -122,14 +204,6 @@ python smarti_core.pyw
 ```powershell
 pythonw smarti_core.pyw
 ```
-
-## הגדרה ראשונית
-
-1. פתחו את מסך ההגדרות מתוך תפריט האפליקציה.
-2. בחרו ספק מודל: Gemini, OpenAI, Anthropic, OpenRouter, Groq או Local.
-3. הזינו את מפתח ה-API הרלוונטי או כתובת שרת מקומי.
-4. הגדירו הרשאות, כלי מערכת, אוטומציות, אימייל, MCP/Skills ותיקיית פלט.
-5. בפעולות רגישות, Smarti יבקש אישור לפני הרצת פקודות, כתיבת קבצים, העלאת תוכן למודל בענן, שימוש באימייל או שליטה במחשב.
 
 ## יכולות אופציונליות
 
