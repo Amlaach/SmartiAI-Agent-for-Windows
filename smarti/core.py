@@ -1562,6 +1562,27 @@ class SmartiCore:
             except Exception: pass
         return allowed or [APP_DIR]
 
+    def _ssl_request_kwargs(self):
+        if self.settings.get("allow_insecure_ssl_compat", False):
+            try:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+            return {"verify": False}
+        return {}
+
+    def _friendly_ssl_error(self, error):
+        if self.settings.get("allow_insecure_ssl_compat", False):
+            return (
+                "שגיאת SSL מול ספק ה-AI גם לאחר הפעלת מצב תאימות SSL. "
+                "זה בדרך כלל מצביע על סינון/פרוקסי/אנטי-וירוס שמחליף תעודות, או על תקלה זמנית בנתיב הרשת."
+            )
+        return (
+            "שגיאת SSL מול ספק ה-AI: שרשרת התעודות שהתקבלה כוללת תעודה שאינה אמינה למערכת. "
+            "אם יש סינון רשת, פרוקסי או אנטי-וירוס שמבצע בדיקת HTTPS, אפשר להפעיל בהגדרות את מצב תאימות SSL "
+            "(פחות בטוח), או להתקין במערכת את תעודת השורש של הסינון."
+        )
+
     def _mcp_env(self):
         allowlist = self.settings.get("mcp_env_allowlist") or DEFAULT_MCP_ENV_ALLOWLIST
         env = {}
@@ -3264,13 +3285,21 @@ CWD: {current_dir}
                 if self.mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
                     base_url = get_url(URL_GEMINI_GEN)
-                    url = f"{base_url}{current_model}:generateContent?key={api_key}"
+                    url = f"{base_url}{current_model}:generateContent"
                     payload = {
                         "systemInstruction": {"parts": [{"text": self.system_prompt}]},
                         "contents": current_messages,
                         "generationConfig": {"temperature": 0.7}
                     }
-                    response = self._run_cancelable_callable(lambda: requests.post(url, json=payload, timeout=120))
+                    response = self._run_cancelable_callable(
+                        lambda: requests.post(
+                            url,
+                            json=payload,
+                            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                            timeout=120,
+                            **self._ssl_request_kwargs()
+                        )
+                    )
                     if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
                     response.raise_for_status()
                     data = response.json()
@@ -3303,7 +3332,9 @@ CWD: {current_dir}
                     extra_system = "\n\n".join([str(m.get("content", "")) for m in current_messages if m.get("role") == "system" and m.get("content") != self.system_prompt])
                     system_text = self.system_prompt + (f"\n\n{extra_system}" if extra_system else "")
                     payload = {"model": current_model, "system": system_text, "messages": [m for m in current_messages if m["role"] != "system"], "max_tokens": 4096, "temperature": 0.7}
-                    response = self._run_cancelable_callable(lambda: requests.post(url, json=payload, headers=headers, timeout=120))
+                    response = self._run_cancelable_callable(
+                        lambda: requests.post(url, json=payload, headers=headers, timeout=120, **self._ssl_request_kwargs())
+                    )
                     if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
                     response.raise_for_status()
                     resp_data = response.json()
@@ -3313,6 +3344,8 @@ CWD: {current_dir}
             except SmartiCancelled:
                 raise Exception("CANCELLED_BY_USER")
             except requests.exceptions.Timeout: raise Exception("TIMEOUT")
+            except requests.exceptions.SSLError as e:
+                raise Exception(self._friendly_ssl_error(e))
             except Exception as e:
                 err_str = str(e).lower()
                 if any(k in err_str for k in ["overload", "429", "rate limit", "503", "500", "502", "504", "too many requests"]):
@@ -3324,7 +3357,8 @@ CWD: {current_dir}
                         if self.status_callback: self.status_callback(f"מחדש פנייה לשרת (ניסיון {retries})...")
                         continue
                     else: raise Exception("RATE_LIMIT_ABORTED")
-                else: raise e 
+                else:
+                    raise Exception(redact_sensitive_text(str(e), self.settings))
         raise Exception("RATE_LIMIT_ABORTED")
 
     def _verify_final_response(self, objective, final_response):

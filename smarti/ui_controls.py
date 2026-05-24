@@ -146,12 +146,16 @@ class SmartiCheckBox(QCheckBox):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(38)
         self.setStyleSheet("background: transparent;")
 
     def sizeHint(self):
         hint = super().sizeHint()
         return QSize(max(hint.width() + 40, 180), max(hint.height(), 38))
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -186,6 +190,77 @@ class SmartiCheckBox(QCheckBox):
         painter.setPen(QColor(TEXT_COLOR if self.isEnabled() else SUBTLE_TEXT_COLOR))
         painter.setFont(self.font())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute, self.text())
+        painter.end()
+
+class RtlFillSlider(QSlider):
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(orientation, parent)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setMouseTracking(True)
+        self.setMinimumHeight(48)
+        self.setPageStep(1)
+
+    def _track_rect(self):
+        track_h = 30
+        margin_x = 4
+        return QRectF(margin_x, (self.height() - track_h) / 2, max(1, self.width() - margin_x * 2), track_h)
+
+    def _value_from_x(self, x):
+        rect = self._track_rect()
+        ratio = (rect.right() - float(x)) / max(1.0, rect.width())
+        ratio = max(0.0, min(1.0, ratio))
+        return self.minimum() + round(ratio * (self.maximum() - self.minimum()))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self.setSliderDown(True)
+            self.setValue(self._value_from_x(event.position().x()))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.isSliderDown() and self.isEnabled():
+            self.setValue(self._value_from_x(event.position().x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self.setValue(self._value_from_x(event.position().x()))
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self._track_rect()
+        radius = rect.height() / 2
+
+        track_path = QPainterPath()
+        track_path.addRoundedRect(rect, radius, radius)
+        painter.fillPath(track_path, QColor(PANEL_ELEVATED_COLOR if self.isEnabled() else FIELD_COLOR))
+
+        span = max(1, self.maximum() - self.minimum())
+        ratio = (self.value() - self.minimum()) / span
+        fill_w = rect.width() * max(0.0, min(1.0, ratio))
+        if fill_w > 0:
+            fill_rect = QRectF(rect.right() - fill_w, rect.top(), fill_w, rect.height())
+            fill_path = QPainterPath()
+            fill_path.addRoundedRect(fill_rect, radius, radius)
+            gradient = QLinearGradient(fill_rect.topRight(), fill_rect.topLeft())
+            gradient.setColorAt(0.0, QColor(ACCENT_COLOR))
+            gradient.setColorAt(1.0, QColor(ACCENT_SECONDARY_COLOR))
+            painter.fillPath(fill_path.intersected(track_path), QBrush(gradient))
+
+        pen = QPen(QColor(SOFT_LINE_COLOR))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        painter.drawPath(track_path)
         painter.end()
 
 class SettingsNavCard(QFrame):
@@ -548,6 +623,7 @@ class ExpandingTextEdit(QTextEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._is_aligning = False
+        self._placeholder_text = ""
         self.setAcceptRichText(False)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -575,6 +651,31 @@ class ExpandingTextEdit(QTextEdit):
         self.setFixedHeight(self.min_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.textChanged.connect(self._force_rtl_alignment)
+
+    def setPlaceholderText(self, text):
+        self._placeholder_text = str(text or "")
+        super().setPlaceholderText("")
+        self.viewport().update()
+
+    def placeholderText(self):
+        return self._placeholder_text
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.toPlainText() or not self._placeholder_text:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setPen(QColor(SUBTLE_TEXT_COLOR))
+        painter.setFont(self.font())
+        margin = int(self.document().documentMargin())
+        rect = self.viewport().rect().adjusted(margin, 2, -margin, 0)
+        painter.drawText(
+            rect,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter,
+            self._placeholder_text
+        )
+        painter.end()
 
     def _force_rtl_alignment(self):
         if getattr(self, '_is_aligning', False): return

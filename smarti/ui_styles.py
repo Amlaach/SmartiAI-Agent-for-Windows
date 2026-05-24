@@ -348,7 +348,7 @@ def _refresh_theme_exports(mode=None, settings=None):
         QSlider {{ min-height: 54px; }}
         QSlider::groove:horizontal {{
             height: 32px; border-radius: 16px;
-            background: {FIELD_COLOR};
+            background: {PANEL_ELEVATED_COLOR};
         }}
         QSlider::sub-page:horizontal {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -360,12 +360,12 @@ def _refresh_theme_exports(mode=None, settings=None):
             border-radius: 16px;
         }}
         QSlider::handle:horizontal {{
-            background: {BG_ELEVATED_COLOR};
-            border: 2px solid {ACCENT_COLOR};
-            width: 34px; height: 30px; margin: 0px -1px; border-radius: 15px;
+            background: transparent;
+            border: none;
+            width: 0px; height: 0px; margin: 0px;
         }}
         QSlider::handle:horizontal:hover {{
-            background: {FIELD_HOVER_COLOR};
+            background: transparent;
         }}
     """
 

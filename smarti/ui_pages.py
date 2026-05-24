@@ -835,10 +835,8 @@ class SettingsPage(QWidget):
         self.daily_token_budget = QLineEdit(str(budgets.get("daily_token_budget", 0)))
         self.daily_cost_budget = QLineEdit(str(budgets.get("daily_cost_budget_usd", 0)))
         
-        self.loops_slider = QSlider(Qt.Orientation.Horizontal)
+        self.loops_slider = RtlFillSlider(Qt.Orientation.Horizontal)
         self.loops_slider.setRange(4, 31)
-        self.loops_slider.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.loops_slider.setInvertedAppearance(False)
         saved_loops = self.core.settings.get("max_agent_loops", 15)
         try:
             saved_loops = int(saved_loops)
@@ -1116,7 +1114,12 @@ class SettingsPage(QWidget):
             self.api_key_edit.setEnabled(True)
         self.model_combo.clear()
         self.model_combo.addItem("טוען מודלים...")
-        self.fetch_worker = FetchModelsWorker(text, self.api_key_edit.text(), self.core.settings.get("local_server_url", ""))
+        self.fetch_worker = FetchModelsWorker(
+            text,
+            self.api_key_edit.text(),
+            self.core.settings.get("local_server_url", ""),
+            self.core.settings.get("allow_insecure_ssl_compat", False)
+        )
         self.fetch_worker.finished_signal.connect(lambda models: self.populate_models(models, text))
         self.fetch_worker.start()
         self._schedule_autosave()

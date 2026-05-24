@@ -5,13 +5,65 @@ from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage
 
+def _asset_icon(*filenames):
+    for filename in filenames:
+        path = os.path.join(ASSETS_DIR, filename)
+        if os.path.exists(path):
+            icon = QIcon(path)
+            if not icon.isNull():
+                return icon
+    return QIcon()
+
+class PillInputFrame(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("InputFrame")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._hovered = False
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def apply_theme(self):
+        self.setStyleSheet("background: transparent; border: none;")
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = rect.height() / 2.0
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+
+        if self._hovered:
+            painter.fillPath(path, QColor(FIELD_HOVER_COLOR))
+            border_color = QColor(LINE_COLOR)
+        else:
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            gradient.setColorAt(0.0, QColor(GLASS_STRONG_COLOR))
+            gradient.setColorAt(1.0, QColor(INPUT_GRADIENT_END))
+            painter.fillPath(path, QBrush(gradient))
+            border_color = QColor(SOFT_LINE_COLOR)
+
+        painter.setPen(QPen(border_color, 1))
+        painter.drawPath(path)
+        painter.end()
+
 class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, parent_width=450):
         super().__init__()
         self.is_user = is_user
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(20, 16, 20, 16)
-        self.main_layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetFixedSize)
         self.max_w = int(parent_width * 0.76) - 30
         self.copy_text = str(text or "")
         
@@ -83,7 +135,13 @@ class MessageBubble(QFrame):
         self.max_w = max(220, int(parent_width * 0.76) - 30)
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
+        self._refresh_layout()
+
+    def _refresh_layout(self):
         self.updateGeometry()
+        parent = self.parentWidget()
+        if parent:
+            parent.updateGeometry()
 
     def add_step(self, step_text):
         clean_step = html.escape(step_text.replace('\n', ' ').strip())
@@ -95,6 +153,7 @@ class MessageBubble(QFrame):
         self.steps_container.show()
         self.start_steps_shimmer()
         if not self.is_expanded: self.toggle_steps() 
+        self._refresh_layout()
             
     def set_final_text(self, final_text):
         if not final_text: return
@@ -115,15 +174,18 @@ class MessageBubble(QFrame):
             rendered_html = f"<span>{rendered_html}</span>"
         self.final_label.setText(rendered_html)
         if self.steps_text_html: self.collapse_steps()
+        self._refresh_layout()
 
     def toggle_steps(self):
         self.is_expanded = not self.is_expanded
         self.steps_label.setVisible(self.is_expanded)
+        self._refresh_layout()
         self.toggle_btn.setText("▲ שלבי פעולה" if self.is_expanded else "▼ שלבי פעולה")
 
     def collapse_steps(self):
         self.is_expanded = False
         self.steps_label.hide()
+        self._refresh_layout()
         self.toggle_btn.setText("▼ שלבי פעולה")
 
     def start_steps_shimmer(self):
@@ -136,6 +198,8 @@ class MessageBubble(QFrame):
         return self.copy_text or self.final_label.text() or self.steps_label.text()
 
 class ChatMessageContainer(QWidget):
+    tts_button_clicked = pyqtSignal(object)
+
     def __init__(self, text, is_user=False, parent_width=450):
         super().__init__()
         self.setMouseTracking(True)
@@ -144,8 +208,18 @@ class ChatMessageContainer(QWidget):
         self.setStyleSheet("background: transparent;")
         self.bubble = MessageBubble(text, is_user, parent_width)
         self.is_user = is_user
+        self._tts_active = False
+        self._tts_blocked = False
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.content_wrap = QWidget()
+        self.content_wrap.setStyleSheet("background: transparent;")
+        self.content_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.content_wrap)
+
+        layout = QVBoxLayout(self.content_wrap)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -161,25 +235,36 @@ class ChatMessageContainer(QWidget):
 
         self.actions_container = QWidget()
         self.actions_container.setMouseTracking(True)
-        self.actions_container.setFixedHeight(34)
+        self.actions_container.setFixedHeight(28)
         self.actions_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.actions_container.setStyleSheet("background: transparent;")
         actions_layout = QHBoxLayout(self.actions_container)
         actions_layout.setContentsMargins(12, 0, 12, 0)
-        actions_layout.setSpacing(6)
+        actions_layout.setSpacing(4)
 
         self.copy_btn = QPushButton()
-        self.copy_btn.setFixedSize(28, 28)
+        self.copy_btn.setFixedSize(24, 24)
         self.copy_btn.setToolTip("העתק")
         self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         copy_icon_path = os.path.join(ASSETS_DIR, "copy_icon.png")
         if os.path.exists(copy_icon_path):
             self.copy_btn.setIcon(QIcon(copy_icon_path))
-            self.copy_btn.setIconSize(QSize(18, 18))
+            self.copy_btn.setIconSize(QSize(15, 15))
         else:
             self.copy_btn.setText("⧉")
         self.copy_btn.clicked.connect(self.copy_message_text)
-        self.apply_theme()
+
+        self.tts_btn = None
+        self.tts_read_icon = QIcon()
+        self.tts_stop_icon = QIcon()
+        if not is_user:
+            self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
+            self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
+            self.tts_btn = QPushButton()
+            self.tts_btn.setFixedSize(24, 24)
+            self.tts_btn.setToolTip("Read aloud")
+            self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
 
         if is_user:
             actions_layout.addWidget(self.copy_btn)
@@ -187,9 +272,10 @@ class ChatMessageContainer(QWidget):
         else:
             actions_layout.addStretch()
             actions_layout.addWidget(self.copy_btn)
+            actions_layout.addWidget(self.tts_btn)
 
         self.actions_opacity = QGraphicsOpacityEffect(self.actions_container)
-        self.actions_opacity.setOpacity(0.0)
+        self.actions_opacity.setOpacity(1.0)
         self.actions_container.setGraphicsEffect(self.actions_opacity)
         layout.addWidget(self.actions_container)
 
@@ -200,47 +286,76 @@ class ChatMessageContainer(QWidget):
         self._enter_opacity = None
         self._enter_anim = None
         self._enter_slide_anim = None
+        self.apply_theme()
+
+    def _button_css(self, active=False):
+        color = DANGER_COLOR if active else MUTED_TEXT_COLOR
+        hover = "rgba(240,90,110,0.16)" if active else ACCENT_TINT
+        pressed = "rgba(240,90,110,0.24)" if active else ACCENT_TINT_STRONG
+        return (
+            f"QPushButton {{ background: transparent; color: {color}; border: none; "
+            f"padding: 0px; border-radius: 12px; font-size: 13px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {hover}; color: {TEXT_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {pressed}; }}"
+            f"QPushButton:disabled {{ background: transparent; color: {SUBTLE_TEXT_COLOR}; }}"
+        )
 
     def apply_theme(self):
         self.setStyleSheet("background: transparent;")
         self.actions_container.setStyleSheet("background: transparent;")
-        self.copy_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED_TEXT_COLOR}; border: none; "
-            f"padding: 0px; border-radius: 14px; font-size: 17px; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
-        )
+        self.copy_btn.setStyleSheet(self._button_css(False))
+        if self.tts_btn:
+            self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
+            self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
+        self.update_tts_button_state(self._tts_active, self._tts_blocked)
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
+
+    def update_tts_button_state(self, active=False, blocked=False):
+        if not self.tts_btn:
+            return
+        self._tts_active = bool(active)
+        self._tts_blocked = bool(blocked)
+        self.tts_btn.setEnabled(not blocked or active)
+        icon = self.tts_stop_icon if active else self.tts_read_icon
+        if not icon.isNull():
+            self.tts_btn.setIcon(icon)
+            self.tts_btn.setIconSize(QSize(15, 15))
+            self.tts_btn.setText("")
+        else:
+            self.tts_btn.setIcon(QIcon())
+            self.tts_btn.setText("X" if active else "A")
+        self.tts_btn.setToolTip("Stop reading" if active else "Read aloud")
+        self.tts_btn.setStyleSheet(self._button_css(active))
 
     def start_entry_animation(self):
         if self._entry_started or not self.isVisible():
             return
         self._entry_started = True
-        self.setMaximumHeight(16777215)
 
-        self._enter_opacity = QGraphicsOpacityEffect(self)
+        self._enter_opacity = QGraphicsOpacityEffect(self.content_wrap)
         self._enter_opacity.setOpacity(0.0)
-        self.setGraphicsEffect(self._enter_opacity)
+        self.content_wrap.setGraphicsEffect(self._enter_opacity)
 
         self._enter_anim = QPropertyAnimation(self._enter_opacity, b"opacity", self)
-        self._enter_anim.setDuration(330)
+        self._enter_anim.setDuration(360)
         self._enter_anim.setStartValue(0.0)
         self._enter_anim.setEndValue(1.0)
-        self._enter_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._enter_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
-        end_pos = self.pos()
+        end_pos = self.content_wrap.pos()
         start_pos = end_pos + QPoint(0, 18)
-        self.move(start_pos)
-        self._enter_slide_anim = QPropertyAnimation(self, b"pos", self)
-        self._enter_slide_anim.setDuration(330)
+        self.content_wrap.move(start_pos)
+        self._enter_slide_anim = QPropertyAnimation(self.content_wrap, b"pos", self)
+        self._enter_slide_anim.setDuration(360)
         self._enter_slide_anim.setStartValue(start_pos)
         self._enter_slide_anim.setEndValue(end_pos)
-        self._enter_slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._enter_slide_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
         def cleanup():
-            self.move(end_pos)
-            self.setGraphicsEffect(None)
+            self.content_wrap.move(end_pos)
+            self.content_wrap.setGraphicsEffect(None)
+            self.updateGeometry()
 
         self._enter_anim.finished.connect(cleanup)
         self._enter_slide_anim.start()
@@ -251,14 +366,12 @@ class ChatMessageContainer(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._set_actions_visible(False)
+        self._set_actions_visible(True)
         super().leaveEvent(event)
 
     def _set_actions_visible(self, visible):
         self.opacity_anim.stop()
-        self.opacity_anim.setStartValue(self.actions_opacity.opacity())
-        self.opacity_anim.setEndValue(1.0 if visible else 0.0)
-        self.opacity_anim.start()
+        self.actions_opacity.setOpacity(1.0)
 
     def copy_message_text(self):
         QApplication.clipboard().setText(self.bubble.plain_text())
@@ -415,6 +528,10 @@ class ChatWindow(QMainWindow):
         self.agent_running = False
         self.current_agent_bubble = None
         self.current_agent_container = None
+        self.active_tts_container = None
+        self.tts_active = False
+        self.tts_thread = None
+        self._tts_workers = []
         
         icon_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(icon_path):
@@ -512,14 +629,14 @@ class ChatWindow(QMainWindow):
     def _chat_input_stylesheet(self):
         return (
             f"QTextEdit {{ background-color: transparent; color: {FIELD_TEXT_COLOR}; border: none; "
-            f"padding: 2px 12px; font-size: 15px; font-family: 'Segoe UI'; outline: none; text-align: left; }}"
+            f"padding: 4px 10px; font-size: 17px; font-family: 'Segoe UI'; outline: none; text-align: left; }}"
             f"QTextEdit viewport {{ background-color: transparent; border: none; }}"
         )
 
     def refresh_themed_icons(self):
-        self.mic_icon = make_circular_pixmap(os.path.join(ASSETS_DIR, "mic_icon.png"), 56, ACCENT_COLOR, 2)
-        self.send_icon = make_circular_pixmap(os.path.join(ASSETS_DIR, "send_icon.png"), 56, ACCENT_COLOR, 2, ACCENT_COLOR)
-        self.stop_agent_icon = make_circular_pixmap(os.path.join(ASSETS_DIR, "stop_agent_icon.png"), 56, ACCENT_COLOR, 2, ACCENT_COLOR)
+        self.mic_icon = _asset_icon(f"mic_icon_{CURRENT_THEME}.png", "mic_icon.png")
+        self.send_icon = _asset_icon(f"send_icon_{CURRENT_THEME}.png", "send_icon.png")
+        self.stop_agent_icon = _asset_icon(f"stop_agent_icon_{CURRENT_THEME}.png", "stop_agent_icon.png")
 
     def apply_theme(self, mode=None, refresh_messages=True):
         apply_app_theme(QApplication.instance(), mode=mode, settings=self.core.settings)
@@ -546,13 +663,13 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "status_lbl"):
             self.status_lbl.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 13px; font-weight: 700; padding: 0px 15px 5px 15px;")
         if hasattr(self, "input_frame"):
-            self.input_frame.setStyleSheet(INPUT_FRAME_CSS)
-            apply_soft_shadow(self.input_frame, blur=38, y=12, alpha=38)
+            if hasattr(self.input_frame, "apply_theme"):
+                self.input_frame.apply_theme()
+            else:
+                self.input_frame.setStyleSheet(INPUT_FRAME_CSS)
+            apply_soft_shadow(self.input_frame, blur=42, y=12, alpha=42)
         if hasattr(self, "input_field"):
             self.input_field.setStyleSheet(self._chat_input_stylesheet())
-        if hasattr(self, "stop_audio_btn"):
-            self.stop_audio_btn.setStyleSheet(icon_button_css(60, danger=True))
-            apply_soft_shadow(self.stop_audio_btn, blur=24, y=7, alpha=30)
         if hasattr(self, "logo_lbl"):
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
@@ -566,6 +683,8 @@ class ChatWindow(QMainWindow):
         if refresh_messages:
             for container in self.findChildren(ChatMessageContainer):
                 container.apply_theme()
+            self._refresh_message_tts_buttons()
+        QTimer.singleShot(0, self._update_chat_bottom_padding)
 
     def refresh_chat_messages_async(self, batch_size=18):
         containers = list(self.findChildren(ChatMessageContainer))
@@ -593,7 +712,8 @@ class ChatWindow(QMainWindow):
         self.chat_page.setObjectName("ChatPage")
         self.chat_page.setStyleSheet(self._chat_page_stylesheet())
         main_layout = QVBoxLayout(self.chat_page)
-        main_layout.setContentsMargins(0, 0, 0, 18)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         top_bar = QWidget()
         self.top_bar = top_bar
@@ -659,6 +779,12 @@ class ChatWindow(QMainWindow):
         self.header_line.setFixedHeight(0)
         self.header_line.setStyleSheet("background: transparent; max-height: 0px;")
         main_layout.addWidget(self.header_line)
+
+        self.chat_body = QWidget()
+        self.chat_body.setStyleSheet("background: transparent;")
+        body_layout = QGridLayout(self.chat_body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
         
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -668,62 +794,57 @@ class ChatWindow(QMainWindow):
         self.chat_widget.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_widget)
         self.chat_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.chat_layout.setContentsMargins(12, 14, 12, 14)
+        self.chat_layout.setContentsMargins(12, 14, 12, 128)
         self.chat_layout.setSpacing(8)
         self.scroll.setWidget(self.chat_widget)
-        main_layout.addWidget(self.scroll)
+        body_layout.addWidget(self.scroll, 0, 0)
         
+        self.input_overlay = QWidget()
+        self.input_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.input_overlay.setStyleSheet("background: transparent;")
+        overlay_layout = QVBoxLayout(self.input_overlay)
+        overlay_layout.setContentsMargins(18, 0, 18, 18)
+        overlay_layout.setSpacing(4)
+
         self.status_lbl = ShimmerLabel("")
         self.status_lbl.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 13px; font-weight: 700; padding: 0px 15px 5px 15px;")
-        main_layout.addWidget(self.status_lbl)
+        overlay_layout.addWidget(self.status_lbl)
         
         bottom_layout = QHBoxLayout()
-        bottom_layout.setContentsMargins(18, 0, 18, 0)
-        bottom_layout.setSpacing(10)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
         
-        self.input_frame = QFrame()
-        self.input_frame.setObjectName("InputFrame")
-        self.input_frame.setMinimumHeight(84)
-        self.input_frame.setStyleSheet(INPUT_FRAME_CSS)
-        input_frame_layout = QVBoxLayout(self.input_frame)
-        input_frame_layout.setContentsMargins(12, 8, 12, 8)
-        input_frame_layout.setSpacing(0)
+        self.input_frame = PillInputFrame()
+        self.input_frame.setMinimumHeight(82)
+        self.input_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.input_frame.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.input_frame.apply_theme()
+        apply_soft_shadow(self.input_frame, blur=42, y=12, alpha=42)
+        input_frame_layout = QHBoxLayout(self.input_frame)
+        input_frame_layout.setContentsMargins(10, 8, 12, 8)
+        input_frame_layout.setSpacing(8)
 
         self.input_field = ExpandingTextEdit()
         self.input_field.setPlaceholderText("הודעה")
         self.input_field.setStyleSheet(self._chat_input_stylesheet())
         self.input_field.textChanged.connect(self.on_text_change)
         self.input_field.send_signal.connect(self.send_text)
-        input_frame_layout.addWidget(self.input_field, alignment=Qt.AlignmentFlag.AlignVCenter)
+        input_frame_layout.addWidget(self.input_field, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
         
         self.action_btn = QPushButton()
-        self.action_btn.setFixedSize(60, 60)
+        self.action_btn.setFixedSize(52, 52)
         self.action_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
         self.refresh_themed_icons()
         self.update_action_btn_visuals()
+        input_frame_layout.insertWidget(0, self.action_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
         
-        self.stop_audio_btn = QPushButton()
-        self.stop_audio_btn.setFixedSize(60, 60)
-        self.stop_audio_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.stop_audio_btn.setToolTip("עצור הקראה")
-        self.stop_audio_btn.clicked.connect(self.core.stop_speaking)
-        self.stop_audio_btn.hide()
-        
-        stop_icon_path = os.path.join(ASSETS_DIR, "stop_icon.png")
-        if os.path.exists(stop_icon_path):
-            self.stop_audio_btn.setIcon(QIcon(stop_icon_path))
-            self.stop_audio_btn.setIconSize(QSize(22, 22)) 
-            self.stop_audio_btn.setStyleSheet(icon_button_css(60, danger=True))
-        else:
-            self.stop_audio_btn.setText("■")
-            self.stop_audio_btn.setStyleSheet(icon_button_css(60, danger=True))
-        
-        # סידור לפי קוד LTR טבעי: תיבת טקסט, ואז כפתורים לימינה. ה-RTL הופך אותם חזותית!
+        # Keep the action button visually on the left even inside the RTL chat.
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
-        bottom_layout.addWidget(self.stop_audio_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
-        bottom_layout.addWidget(self.action_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
-        main_layout.addLayout(bottom_layout)
+        overlay_layout.addLayout(bottom_layout)
+        body_layout.addWidget(self.input_overlay, 0, 0, Qt.AlignmentFlag.AlignBottom)
+        main_layout.addWidget(self.chat_body, 1)
+        QTimer.singleShot(0, self._update_chat_bottom_padding)
 
     def show_usage_page(self):
         if self.usage_page is None:
@@ -823,10 +944,73 @@ class ChatWindow(QMainWindow):
             available_width = self.scroll.viewport().width() or self.width()
             for bubble in self.findChildren(MessageBubble):
                 bubble.update_parent_width(available_width)
+            self._update_chat_bottom_padding()
         except Exception:
             pass
 
-    def on_tts_status(self, is_playing): self.stop_audio_btn.setVisible(is_playing)
+    def _update_chat_bottom_padding(self):
+        if not hasattr(self, "chat_layout") or not hasattr(self, "input_overlay"):
+            return
+        margins = self.chat_layout.contentsMargins()
+        overlay_h = max(112, self.input_overlay.sizeHint().height() + 22)
+        if margins.bottom() != overlay_h:
+            self.chat_layout.setContentsMargins(margins.left(), margins.top(), margins.right(), overlay_h)
+
+    def on_tts_status(self, is_playing):
+        self.tts_active = bool(is_playing)
+        if not is_playing and not (self.tts_thread and self.tts_thread.isRunning()):
+            self.active_tts_container = None
+        self._refresh_message_tts_buttons()
+
+    def _wire_message_container(self, container):
+        container.tts_button_clicked.connect(self.handle_message_tts_button)
+        container.update_tts_button_state(False, self.tts_active)
+
+    def _refresh_message_tts_buttons(self):
+        for container in self.findChildren(ChatMessageContainer):
+            if container.is_user:
+                continue
+            active = self.tts_active and container is self.active_tts_container
+            blocked = self.tts_active and container is not self.active_tts_container
+            container.update_tts_button_state(active, blocked)
+
+    def handle_message_tts_button(self, container):
+        if container is self.active_tts_container and self.tts_active:
+            self.core.stop_speaking()
+            self.tts_active = False
+            self.active_tts_container = None
+            self._refresh_message_tts_buttons()
+            return
+        if self.tts_active:
+            return
+        self.start_message_tts(container)
+
+    def start_message_tts(self, container):
+        if not container or container.is_user:
+            return
+        text = container.bubble.plain_text()
+        if not str(text or "").strip():
+            return
+        self.active_tts_container = container
+        self.tts_active = True
+        self._refresh_message_tts_buttons()
+        worker = TTSWorker(self.core, text)
+        self.tts_thread = worker
+        self._tts_workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._on_message_tts_finished(w))
+        worker.start()
+
+    def _on_message_tts_finished(self, worker):
+        try:
+            self._tts_workers.remove(worker)
+        except ValueError:
+            pass
+        if worker is self.tts_thread:
+            self.tts_thread = None
+            self.tts_active = False
+            self.active_tts_container = None
+            self._refresh_message_tts_buttons()
+
     def show_menu(self): self.menu.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height())))
 
     def update_action_btn_visuals(self):
@@ -835,16 +1019,18 @@ class ChatWindow(QMainWindow):
 
         if self.agent_running:
             self.action_btn.setToolTip("עצור פעולה")
-            if self.stop_agent_icon:
-                self.action_btn.setIcon(QIcon(self.stop_agent_icon))
-                self.action_btn.setIconSize(QSize(56, 56))
+            if not self.stop_agent_icon.isNull():
+                self.action_btn.setIcon(self.stop_agent_icon)
+                self.action_btn.setIconSize(QSize(28, 28))
                 self.action_btn.setText("")
-                border_css, bg_color = "border: none; border-radius: 30px;", ACCENT_TINT
+                border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
             else:
                 self.action_btn.setIcon(QIcon())
                 self.action_btn.setText("■")
-                border_css, bg_color = f"border: none; color: {ACCENT_COLOR}; border-radius: 30px;", ACCENT_TINT
-            hover_bg = HOVER_TINT
+                border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
+            fg_color = ACCENT_TEXT_COLOR
+            hover_bg = ACCENT_COLOR
+            pressed_bg = ACCENT_TINT_STRONG
             self.action_btn.clicked.connect(self.cancel_agent)
         else:
             self.action_btn.setToolTip("")
@@ -852,28 +1038,31 @@ class ChatWindow(QMainWindow):
             target_icon = self.send_icon if has_text else self.mic_icon
             fallback_text = "שלח" if has_text else "קול"
             
-            if target_icon:
-                self.action_btn.setIcon(QIcon(target_icon))
-                self.action_btn.setIconSize(QSize(56, 56))
+            if not target_icon.isNull():
+                self.action_btn.setIcon(target_icon)
+                self.action_btn.setIconSize(QSize(28, 28))
                 self.action_btn.setText("")
-                border_css, bg_color = "border: none; border-radius: 30px;", ACCENT_TINT
+                border_css = "border: none; border-radius: 26px;"
             else:
                 self.action_btn.setIcon(QIcon())
                 self.action_btn.setText(fallback_text)
-                border_css, bg_color = f"border: none; color: {ACCENT_COLOR}; border-radius: 30px;", ACCENT_TINT
-            hover_bg = HOVER_TINT if has_text else ACCENT_TINT
+                border_css = "border: none; border-radius: 26px;"
+            bg_color = ACCENT_COLOR if has_text else ACCENT_TINT_STRONG
+            fg_color = ACCENT_TEXT_COLOR if has_text else ACCENT_COLOR
+            hover_bg = ACCENT_SECONDARY_COLOR if has_text else HOVER_TINT
+            pressed_bg = ACCENT_TINT_STRONG
             
             if has_text: self.action_btn.clicked.connect(self.send_text)
             else: self.action_btn.clicked.connect(self.start_voice)
 
         self.action_btn.setStyleSheet(
             f"QPushButton {{ background-color: {bg_color}; {border_css} padding: 0px; "
-            f"font-size: 20px; font-weight: 700; }}"
+            f"color: {fg_color}; font-size: 18px; font-weight: 700; }}"
             f"QPushButton:hover {{ background-color: {hover_bg}; }}"
-            f"QPushButton:pressed {{ background-color: {ACCENT_TINT_STRONG}; }}"
+            f"QPushButton:pressed {{ background-color: {pressed_bg}; }}"
             f"QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: transparent; }}"
         )
-        apply_soft_shadow(self.action_btn, blur=30, y=9, alpha=36)
+        self.action_btn.setGraphicsEffect(None)
 
     def cancel_agent(self):
         self.core.request_cancel()
@@ -881,16 +1070,20 @@ class ChatWindow(QMainWindow):
         self.action_btn.setEnabled(False)
         self.update_action_btn_visuals()
 
-    def on_text_change(self): self.update_action_btn_visuals()
+    def on_text_change(self):
+        self.update_action_btn_visuals()
+        QTimer.singleShot(0, self._update_chat_bottom_padding)
 
     def add_message(self, text, is_user):
         if not text and is_user: return
         available_width = self.scroll.viewport().width() or self.width()
         container = ChatMessageContainer(text, is_user, available_width)
+        self._wire_message_container(container)
         self.chat_layout.addWidget(container)
         QTimer.singleShot(0, container.start_entry_animation)
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
         QTimer.singleShot(180, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+        return container
 
     def send_text(self):
         text = self.input_field.toPlainText().strip()
@@ -930,6 +1123,7 @@ class ChatWindow(QMainWindow):
         
         available_width = self.scroll.viewport().width() or self.width()
         self.current_agent_container = ChatMessageContainer("", is_user=False, parent_width=available_width)
+        self._wire_message_container(self.current_agent_container)
         self.current_agent_bubble = self.current_agent_container.bubble
         self.chat_layout.addWidget(self.current_agent_container)
         self.current_agent_container.hide() 
@@ -943,11 +1137,11 @@ class ChatWindow(QMainWindow):
 
     def on_agent_step(self, step_text):
         if self.current_agent_bubble:
+            self.current_agent_bubble.show()
+            self.current_agent_bubble.add_step(step_text)
             if self.current_agent_container:
                 self.current_agent_container.show()
                 self.current_agent_container.start_entry_animation()
-            self.current_agent_bubble.show()
-            self.current_agent_bubble.add_step(step_text)
             QTimer.singleShot(50, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
     def show_confirm_dialog(self, title, text):
@@ -963,37 +1157,42 @@ class ChatWindow(QMainWindow):
         self.status_lbl.setText("")
         self.input_field.setEnabled(True)
         self.input_field.setFocus()
+        response_container = None
         
         if response.startswith("ERROR_USER:"):
             msg = f"שגיאה: {response.replace('ERROR_USER:', '').strip()}"
             if self.current_agent_bubble:
+                self.current_agent_bubble.show()
+                self.current_agent_bubble.set_final_text(msg)
                 if self.current_agent_container:
                     self.current_agent_container.show()
                     self.current_agent_container.start_entry_animation()
-                self.current_agent_bubble.show()
-                self.current_agent_bubble.set_final_text(msg)
             else: self.add_message(msg, is_user=False)
         else:
             if self.current_agent_bubble:
+                self.current_agent_bubble.show()
+                self.current_agent_bubble.set_final_text(response)
                 if self.current_agent_container:
                     self.current_agent_container.show()
                     self.current_agent_container.start_entry_animation()
-                self.current_agent_bubble.show()
-                self.current_agent_bubble.set_final_text(response)
-            else: self.add_message(response, is_user=False)
+                response_container = self.current_agent_container
+            else:
+                response_container = self.add_message(response, is_user=False)
                 
             if should_notify:
                 self.show_response_notification(response)
                 
             if self.core.settings.get("read_aloud_all", False) or (self.core.settings.get("read_aloud_voice_only", True) and getattr(self, 'current_request_is_voice', False)):
-                self.tts_thread = TTSWorker(self.core, response)
-                self.tts_thread.start()
+                self.start_message_tts(response_container)
                 
         self.current_agent_bubble = None
         self.current_agent_container = None
         QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
     def clear_chat(self):
+        self.core.stop_speaking()
+        self.tts_active = False
+        self.active_tts_container = None
         for i in reversed(range(self.chat_layout.count())): 
             item = self.chat_layout.itemAt(i)
             if item.widget(): item.widget().deleteLater()

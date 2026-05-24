@@ -80,7 +80,7 @@ SMARTI_BROWSER_PROFILE_NAME = "SmartiChromeProfile"
 class SmartiCancelled(Exception):
     pass
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout,
                              QHBoxLayout, QTextEdit, QPushButton, QLabel, 
                              QScrollArea, QFrame, QMenu, QLineEdit, 
                              QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox)
