@@ -301,6 +301,7 @@ class ChatMessageContainer(QWidget):
         self.opacity_anim.setDuration(240)
         self.opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._entry_started = False
+        self._entry_pending = False
         self._enter_opacity = None
         self._enter_anim = None
         self._enter_slide_anim = None
@@ -347,6 +348,7 @@ class ChatMessageContainer(QWidget):
         self.tts_btn.setStyleSheet(self._button_css(active))
 
     def start_entry_animation(self):
+        self._entry_pending = False
         if self._entry_started or not self.isVisible():
             return
         self._entry_started = True
@@ -378,6 +380,13 @@ class ChatMessageContainer(QWidget):
         self._enter_anim.finished.connect(cleanup)
         self._enter_slide_anim.start()
         self._enter_anim.start()
+
+    def reveal_with_entry_animation(self):
+        self.show()
+        if self._entry_started or self._entry_pending:
+            return
+        self._entry_pending = True
+        QTimer.singleShot(0, self.start_entry_animation)
 
     def enterEvent(self, event):
         self._set_actions_visible(True)
@@ -1160,8 +1169,7 @@ class ChatWindow(QMainWindow):
             self.current_agent_bubble.show()
             self.current_agent_bubble.add_step(step_text)
             if self.current_agent_container:
-                self.current_agent_container.show()
-                self.current_agent_container.start_entry_animation()
+                self.current_agent_container.reveal_with_entry_animation()
             QTimer.singleShot(50, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
     def show_confirm_dialog(self, title, text):
@@ -1185,16 +1193,14 @@ class ChatWindow(QMainWindow):
                 self.current_agent_bubble.show()
                 self.current_agent_bubble.set_final_text(msg)
                 if self.current_agent_container:
-                    self.current_agent_container.show()
-                    self.current_agent_container.start_entry_animation()
+                    self.current_agent_container.reveal_with_entry_animation()
             else: self.add_message(msg, is_user=False)
         else:
             if self.current_agent_bubble:
                 self.current_agent_bubble.show()
                 self.current_agent_bubble.set_final_text(response)
                 if self.current_agent_container:
-                    self.current_agent_container.show()
-                    self.current_agent_container.start_entry_animation()
+                    self.current_agent_container.reveal_with_entry_animation()
                 response_container = self.current_agent_container
             else:
                 response_container = self.add_message(response, is_user=False)
