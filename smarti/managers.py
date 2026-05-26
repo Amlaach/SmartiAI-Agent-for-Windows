@@ -1161,21 +1161,74 @@ class AgentRuntime:
         del trace[:-80]
         logging.info(f"TRACE | {item['stage']} | {item['detail']}")
 
-    def extract_tool_call(self, text):
+    def _tool_call_entry(self, text, start, end, raw):
+        return {
+            "json_str": raw.strip(),
+            "raw": raw,
+            "start": start,
+            "end": end,
+            "pre_text": text[:start].strip(),
+        }
+
+    def _tool_call_entries_from_obj(self, text, start, end, raw, obj):
+        if isinstance(obj, dict) and obj.get("method") == "tools/call":
+            return [self._tool_call_entry(text, start, end, raw)]
+        calls = []
+        raw_calls = []
+        if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
+            raw_calls = obj.get("tool_calls", [])
+        elif isinstance(obj, list):
+            raw_calls = obj
+        for item in raw_calls:
+            if not isinstance(item, dict):
+                continue
+            if item.get("method") == "tools/call":
+                call_obj = item
+            else:
+                function_obj = item.get("function") if isinstance(item.get("function"), dict) else {}
+                name = item.get("name") or item.get("tool") or item.get("action") or function_obj.get("name")
+                args = item.get("arguments", item.get("args", item.get("input", function_obj.get("arguments", {}))))
+                if not name:
+                    continue
+                if isinstance(args, str):
+                    try:
+                        parsed_args = json.loads(args)
+                        args = parsed_args if isinstance(parsed_args, dict) else {}
+                    except Exception:
+                        args = {}
+                call_obj = {"method": "tools/call", "params": {"name": name, "arguments": args if isinstance(args, dict) else {}}}
+            call_raw = json.dumps(call_obj, ensure_ascii=False)
+            calls.append(self._tool_call_entry(text, start, end, call_raw))
+        return calls
+
+    def extract_tool_calls(self, text):
         text = text or ""
         blocks = list(re.finditer(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL | re.IGNORECASE))
-        tool_blocks = [m for m in blocks if '"tools/call"' in m.group(1)]
-        if tool_blocks:
-            first = tool_blocks[0]
+        calls = []
+        for m in blocks:
+            raw = m.group(1)
+            try:
+                obj = json.loads(raw)
+                calls.extend(self._tool_call_entries_from_obj(text, m.start(), m.end(), raw, obj))
+            except Exception:
+                if '"tools/call"' in raw:
+                    calls.append(self._tool_call_entry(text, m.start(), m.end(), raw))
+        if calls:
+            first = calls[0]
+            last = calls[-1]
             return {
-                "json_str": first.group(1).strip(),
-                "pre_text": text[:first.start()].strip(),
+                "json_str": calls[0]["json_str"],
+                "pre_text": text[:first["start"]].strip(),
                 "is_tool_call_intent": True,
-                "tool_turn_text": text[:first.end()].strip(),
-                "extra_tool_blocks": max(0, len(tool_blocks) - 1)
+                "tool_turn_text": text[:last["end"]].strip(),
+                "extra_tool_blocks": max(0, len(calls) - 1),
+                "tool_calls": calls,
             }
         decoder = json.JSONDecoder()
+        scan_from = 0
         for idx, ch in enumerate(text):
+            if idx < scan_from:
+                continue
             if ch != "{":
                 continue
             try:
@@ -1183,29 +1236,56 @@ class AgentRuntime:
             except Exception:
                 continue
             raw = text[idx:idx + end]
-            if isinstance(obj, dict) and obj.get("method") == "tools/call":
-                return {
-                    "json_str": raw.strip(),
-                    "pre_text": text[:idx].strip(),
-                    "is_tool_call_intent": True,
-                    "tool_turn_text": text[:idx + end].strip(),
-                    "extra_tool_blocks": 0
-                }
-        return {"json_str": "", "pre_text": "", "is_tool_call_intent": False, "tool_turn_text": text, "extra_tool_blocks": 0}
+            entries = self._tool_call_entries_from_obj(text, idx, idx + end, raw, obj)
+            if entries:
+                calls.extend(entries)
+                scan_from = idx + end
+        if calls:
+            return {
+                "json_str": calls[0]["json_str"],
+                "pre_text": text[:calls[0]["start"]].strip(),
+                "is_tool_call_intent": True,
+                "tool_turn_text": text[:calls[-1]["end"]].strip(),
+                "extra_tool_blocks": max(0, len(calls) - 1),
+                "tool_calls": calls,
+            }
+        return {"json_str": "", "pre_text": "", "is_tool_call_intent": False, "tool_turn_text": text, "extra_tool_blocks": 0, "tool_calls": []}
+
+    def extract_tool_call(self, text):
+        parsed = self.extract_tool_calls(text)
+        parsed["extra_tool_blocks"] = max(0, len(parsed.get("tool_calls", []) or []) - 1)
+        return parsed
+
+    def _canonicalize_for_similarity(self, value):
+        if isinstance(value, dict):
+            return {str(k).strip().lower(): self._canonicalize_for_similarity(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]).lower())}
+        if isinstance(value, list):
+            return [self._canonicalize_for_similarity(v) for v in value]
+        if isinstance(value, str):
+            text = unicodedata.normalize("NFKC", value)
+            text = re.sub(r'\s+', ' ', text).strip().lower()
+            text = re.sub(r'["\'`]+', '', text)
+            text = re.sub(r'([\\/]){2,}', r'\1', text)
+            return text
+        return value
 
     def similarity_signature(self, action, args_dict):
-        normalized = json.dumps(args_dict or {}, sort_keys=True, ensure_ascii=False)
+        normalized_obj = self._canonicalize_for_similarity(args_dict or {})
+        normalized = json.dumps(normalized_obj, sort_keys=True, ensure_ascii=False, default=str)
         normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
-        return f"{action}:{normalized[:2000]}"
+        return f"{str(action or '').strip().lower()}:{normalized[:3000]}"
 
     def is_similar_repeat(self, signatures, signature):
-        recent = signatures[-8:]
-        hits = 0
+        recent = signatures[-10:]
+        strong_hits = 0
+        weak_hits = 0
         for previous in recent:
             ratio = difflib.SequenceMatcher(None, previous, signature).ratio()
-            if ratio >= 0.96:
-                hits += 1
-        return hits >= 2
+            if ratio >= 0.985:
+                strong_hits += 1
+            elif ratio >= 0.93:
+                weak_hits += 1
+        return strong_hits >= 2 or (strong_hits >= 1 and weak_hits >= 1) or weak_hits >= 3
 
 
 class McpManager:

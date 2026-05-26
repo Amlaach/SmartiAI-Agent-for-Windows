@@ -24,6 +24,7 @@ class SmartiCore:
         self._agent_lock = threading.RLock()
         self._background_lock = threading.RLock()
         self._active_process_lock = threading.RLock()
+        self._tool_context_lock = threading.RLock()
         self._active_processes = set()
         self._foreground_cancel_event = None
         self.cancel_event = threading.Event()
@@ -70,6 +71,13 @@ class SmartiCore:
         if not os.path.exists(SKILLS_DIR): os.makedirs(SKILLS_DIR)
         if not os.path.exists(ASSETS_DIR): os.makedirs(ASSETS_DIR)
         if not os.path.exists(OUTPUTS_DIR): os.makedirs(OUTPUTS_DIR)
+
+    def _tool_context_guard(self):
+        lock = getattr(self, "_tool_context_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tool_context_lock = lock
+        return lock
 
     def _normalize_autonomy_profile_settings(self):
         key = self.settings.get("autonomy_mode", "balanced")
@@ -643,16 +651,17 @@ class SmartiCore:
             "redacted": True,
             "preview": self._truncate_tool_output(redact_sensitive_text(output, self.settings))[:1200]
         }
-        self.tool_observations.append(record)
-        self.tool_observations = self.tool_observations[-50:]
-        self.recent_tool_observations.append(
-            f"- {record['time'][-8:-3]} | {action} | {status} | args={args_hash} | {record['preview']}"
-        )
-        try:
-            recent_limit = max(12, int(self.settings.get("recent_tool_observations_limit", 40) or 40))
-        except Exception:
-            recent_limit = 40
-        self.recent_tool_observations = self.recent_tool_observations[-recent_limit:]
+        with self._tool_context_guard():
+            self.tool_observations.append(record)
+            self.tool_observations = self.tool_observations[-50:]
+            self.recent_tool_observations.append(
+                f"- {record['time'][-8:-3]} | {action} | {status} | args={args_hash} | {record['preview']}"
+            )
+            try:
+                recent_limit = max(12, int(self.settings.get("recent_tool_observations_limit", 40) or 40))
+            except Exception:
+                recent_limit = 40
+            self.recent_tool_observations = self.recent_tool_observations[-recent_limit:]
 
     def _record_tool_context_event(self, action, args_dict, status, output, trust="untrusted"):
         try:
@@ -674,22 +683,23 @@ class SmartiCore:
             "arguments": args_text[:4000],
             "output": self._truncate_tool_output(output_text)[:per_output_limit],
         }
-        transcript = self.settings.setdefault("tool_context_transcript", [])
-        if not isinstance(transcript, list):
-            transcript = []
-            self.settings["tool_context_transcript"] = transcript
-        transcript.append(entry)
-        try:
-            max_entries = max(40, int(self.settings.get("max_tool_context_entries", 400) or 400))
-        except Exception:
-            max_entries = 400
-        del transcript[:-max_entries]
-        try:
-            max_chars = max(20000, int(self.settings.get("max_tool_context_chars", 120000) or 120000))
-        except Exception:
-            max_chars = 120000
-        while transcript and len(json.dumps(transcript, ensure_ascii=False, default=str)) > max_chars:
-            transcript.pop(0)
+        with self._tool_context_guard():
+            transcript = self.settings.setdefault("tool_context_transcript", [])
+            if not isinstance(transcript, list):
+                transcript = []
+                self.settings["tool_context_transcript"] = transcript
+            transcript.append(entry)
+            try:
+                max_entries = max(40, int(self.settings.get("max_tool_context_entries", 400) or 400))
+            except Exception:
+                max_entries = 400
+            del transcript[:-max_entries]
+            try:
+                max_chars = max(20000, int(self.settings.get("max_tool_context_chars", 120000) or 120000))
+            except Exception:
+                max_chars = 120000
+            while transcript and len(json.dumps(transcript, ensure_ascii=False, default=str)) > max_chars:
+                transcript.pop(0)
 
     def _tool_context_prompt(self):
         transcript = self.settings.get("tool_context_transcript", [])
@@ -753,7 +763,9 @@ class SmartiCore:
         markers = [
             "[UNTRUSTED_", "[SKILL_OBSERVATION_", "SKILL_INSTRUCTIONS:",
             "SKILL_REQUIREMENTS_MISSING:", "tools/call", "הנחיית מערכת:",
-            "UNTRUSTED_TOOL_OUTPUT", "UNTRUSTED_TOOL_ERROR"
+            "UNTRUSTED_TOOL_OUTPUT", "UNTRUSTED_TOOL_ERROR",
+            "[SMARTI_TASK_STATE", "[SMARTI_PROGRESS", "[SMARTI_EVALUATOR",
+            "[SMARTI_PARALLEL_TOOL_RESULTS", "SMARTI_TOOL_OUTPUT_COMPACTED"
         ]
         return any(marker in text for marker in markers)
 
@@ -761,6 +773,8 @@ class SmartiCore:
         text = (text or "").strip()
         text = re.sub(r'\[UNTRUSTED_[A-Z_]+_BEGIN[^\]]*\].*?\[UNTRUSTED_[A-Z_]+_END[^\]]*\]', '', text, flags=re.DOTALL)
         text = re.sub(r'\[SKILL_OBSERVATION_BEGIN[^\]]*\].*?\[SKILL_OBSERVATION_END[^\]]*\]', '', text, flags=re.DOTALL)
+        for marker in ("TASK_STATE", "PROGRESS", "EVALUATOR", "PARALLEL_TOOL_RESULTS"):
+            text = re.sub(rf'\[SMARTI_{marker}_BEGIN[^\]]*\].*?\[SMARTI_{marker}_END[^\]]*\]', '', text, flags=re.DOTALL)
         text = re.sub(r'```json\s*\{.*?"tools/call".*?\}\s*```', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', text, flags=re.DOTALL).strip()
         return text.strip()
@@ -1495,8 +1509,39 @@ class SmartiCore:
         except Exception:
             return ""
 
+    def _inline_tool_feedback_limit(self, is_error=False):
+        key = "max_inline_tool_error_chars" if is_error else "max_inline_tool_feedback_chars"
+        default = 8000 if is_error else 16000
+        try:
+            return max(2000, int(self.settings.get(key, default) or default))
+        except Exception:
+            return default
+
+    def _compact_tool_feedback_for_model(self, action, feedback_for_ai, is_error=False):
+        if feedback_for_ai is None:
+            return ""
+        text = str(feedback_for_ai)
+        if text.startswith("IMAGE_BASE64:"):
+            return text
+        limit = self._inline_tool_feedback_limit(is_error=is_error)
+        if action == "get_tool_info":
+            limit = max(limit, 18000)
+        if len(text) <= limit:
+            return text
+        head_len = max(1000, int(limit * 0.68))
+        tail_len = max(700, limit - head_len - 260)
+        head = text[:head_len].rstrip()
+        tail = text[-tail_len:].lstrip() if tail_len > 0 else ""
+        return (
+            f"{head}\n\n"
+            f"[SMARTI_TOOL_OUTPUT_COMPACTED: omitted {len(text) - len(head) - len(tail)} chars from the middle. "
+            "Full redacted output is retained in the internal tool transcript.]\n\n"
+            f"{tail}"
+        )
+
     def _append_tool_feedback(self, current_messages, ai_response_text, action, feedback_for_ai):
         is_error = str(feedback_for_ai).startswith("ERROR:")
+        feedback_for_ai = self._compact_tool_feedback_for_model(action, feedback_for_ai, is_error=is_error)
         if is_error:
             feedback_payload = (
                 self._wrap_tool_output_for_model(action, feedback_for_ai, is_error=True)
@@ -1535,6 +1580,512 @@ class SmartiCore:
         else:
             current_messages.append({"role": "assistant", "content": ai_response_text})
             current_messages.append({"role": "user", "content": feedback_payload})
+
+    def _estimate_agent_task_complexity(self, user_text):
+        text = (user_text or "").strip().lower()
+        if not text:
+            return 0
+        score = 0
+        if len(text) > 90:
+            score += 1
+        if len(text) > 220:
+            score += 1
+        multi_step_markers = [
+            "ואז", "אחר כך", "לאחר מכן", "במקביל", "כמה", "מספר", "כל ", "כולל",
+            "תנתח", "נתח", "תשווה", "השווה", "תבדוק", "בדוק", "תשפר", "שפר",
+            "תתקן", "תקן", "תבנה", "בנה", "תיצור", "צור", "תכתוב", "כתוב",
+            "תמצא", "מצא", "תחפש", "חפש", "תפתח", "פתח", "תתקין", "התקן",
+            "תשלח", "שלח", "תסכם", "סכם", "דו\"ח", "דוח", "קובץ", "תיקייה",
+            "אתר", "מייל", "אימייל", "אפליקציה", "חלון", "מסך", "בדיקות",
+            "build", "test", "fix", "debug", "refactor", "analyze", "compare",
+            "create", "update", "install", "search", "open", "email"
+        ]
+        score += min(4, sum(1 for marker in multi_step_markers if marker in text))
+        if re.search(r'(\d+\s*(שלבים|דברים|קבצים|משימות))|[,;:]\s*\S+', text):
+            score += 1
+        if "\n" in text:
+            score += 1
+        return score
+
+    def _should_use_task_planner(self, user_text, is_background_task=False):
+        if not self.settings.get("enable_hierarchical_agent", True):
+            return False
+        text = (user_text or "").strip()
+        if not text:
+            return False
+        direct_chat = len(text) < 90 and not any(token in text.lower() for token in [
+            "פתח", "חפש", "בדוק", "צור", "כתוב", "שמור", "שלח", "התקן", "תקן",
+            "קובץ", "אתר", "מייל", "מסך", "תוכנה", "אפליקציה", "weather", "search",
+            "open", "file", "email", "install", "fix"
+        ])
+        if direct_chat:
+            return False
+        try:
+            threshold = int(self.settings.get("agent_planner_min_score", 2) or 2)
+        except Exception:
+            threshold = 2
+        return self._estimate_agent_task_complexity(text) >= max(1, threshold)
+
+    def _fallback_task_plan(self, objective):
+        text = (objective or "").lower()
+        steps = ["להבין את המטרה והאילוצים"]
+        if any(token in text for token in ["חפש", "מצא", "בדוק", "נתח", "השווה", "אתר", "search", "analyze", "compare"]):
+            steps.append("לאסוף את המידע או המצב הרלוונטי")
+        if any(token in text for token in ["צור", "כתוב", "שמור", "תקן", "שפר", "התקן", "פתח", "שלח", "create", "write", "fix", "install", "open", "send"]):
+            steps.append("לבצע את הפעולות הנדרשות בכלים המתאימים")
+        steps.append("לאמת שהתוצאה תואמת לבקשה")
+        steps.append("להחזיר סיכום קצר וברור למשתמש")
+        deduped = []
+        for step in steps:
+            if step not in deduped:
+                deduped.append(step)
+        return deduped[:6]
+
+    def _extract_first_json_object_text(self, text):
+        text = (text or "").strip()
+        fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, flags=re.DOTALL | re.IGNORECASE)
+        if fenced:
+            return fenced.group(1).strip()
+        decoder = json.JSONDecoder()
+        for idx, ch in enumerate(text):
+            if ch != "{":
+                continue
+            try:
+                obj, end = decoder.raw_decode(text[idx:])
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                return text[idx:idx + end].strip()
+        return ""
+
+    def _model_task_plan(self, objective, current_model):
+        planner_prompt = (
+            "אתה Planner פנימי של סמארטי. אל תפעיל כלים ואל תענה למשתמש.\n"
+            "צור תוכנית קצרה, מעשית ובטיחותית למשימה. החזר JSON בלבד במבנה:\n"
+            "{\"steps\":[\"...\"],\"risk\":\"low|medium|high\",\"notes\":\"...\"}\n"
+            "3-7 שלבים, בלי פירוט יתר ובלי לחשוף מחשבות פנימיות.\n\n"
+            f"משימה:\n{objective}"
+        )
+        if self.mode == "gemini":
+            messages = [{"role": "user", "parts": [{"text": planner_prompt}]}]
+        else:
+            messages = [
+                {"role": "system", "content": "Internal planner. Return compact JSON only."},
+                {"role": "user", "content": planner_prompt}
+            ]
+        try:
+            raw, usage_dict = self._handle_api_request_with_retry(current_model, messages)
+            self._log_usage(current_model, usage_dict)
+            json_text = self._extract_first_json_object_text(raw)
+            data = json.loads(json_text) if json_text else {}
+            steps = [re.sub(r'\s+', ' ', str(step)).strip() for step in data.get("steps", []) if str(step).strip()]
+            if steps:
+                return steps[:7], str(data.get("risk", "medium") or "medium"), str(data.get("notes", "") or "")[:500], True
+        except Exception as e:
+            if "CANCELLED_BY_USER" in str(e):
+                raise SmartiCancelled("CANCELLED_BY_USER")
+            logging.warning(f"Task planner skipped: {e}")
+        return self._fallback_task_plan(objective), "medium", "", False
+
+    def _initialize_task_state(self, objective, current_model, is_background_task=False):
+        score = self._estimate_agent_task_complexity(objective)
+        planner_enabled = self._should_use_task_planner(objective, is_background_task=is_background_task)
+        steps = self._fallback_task_plan(objective) if planner_enabled else []
+        risk = "medium" if planner_enabled else "low"
+        notes = ""
+        used_model_planner = False
+        try:
+            model_threshold = int(self.settings.get("agent_model_planner_min_score", 4) or 4)
+        except Exception:
+            model_threshold = 4
+        if planner_enabled and not is_background_task and score >= max(2, model_threshold):
+            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model)
+        return {
+            "objective": objective,
+            "complexity_score": score,
+            "planner_enabled": planner_enabled,
+            "used_model_planner": used_model_planner,
+            "risk": risk,
+            "planner_notes": notes,
+            "plan_steps": steps,
+            "current_step_idx": 0,
+            "completed_steps": [],
+            "observations": [],
+            "failures": [],
+            "evaluations": 0,
+            "last_evaluation": "",
+            "compactions": 0,
+        }
+
+    def _task_state_summary(self, task_state, include_guidance=True):
+        if not task_state or not task_state.get("planner_enabled"):
+            return ""
+        steps = task_state.get("plan_steps", []) or []
+        current_idx = min(max(0, int(task_state.get("current_step_idx", 0) or 0)), max(0, len(steps) - 1)) if steps else 0
+        plan_lines = []
+        for idx, step in enumerate(steps[:7], start=1):
+            marker = "current" if idx - 1 == current_idx else ("done" if step in task_state.get("completed_steps", []) else "pending")
+            plan_lines.append(f"{idx}. [{marker}] {step}")
+        recent_obs = "\n".join(task_state.get("observations", [])[-5:]) or "אין עדיין תצפיות."
+        failures = "\n".join(task_state.get("failures", [])[-3:]) or "אין כשלים משמעותיים."
+        guidance = (
+            "\nהנחיות: פעל לפי התוכנית בגמישות. אם עובדות חדשות משנות את הדרך, עדכן אסטרטגיה. "
+            "הרץ במקביל רק כלים עצמאיים לקריאה בלבד; פעולות כתיבה, מערכת, אימייל, GUI או הרשאות רצות אחת-אחת."
+            if include_guidance else ""
+        )
+        return (
+            "[SMARTI_TASK_STATE_BEGIN]\n"
+            f"Objective: {task_state.get('objective', '')[:900]}\n"
+            f"Mode: {'hierarchical' if task_state.get('planner_enabled') else 'direct'} | Risk: {task_state.get('risk', 'medium')} | Planner: {'model' if task_state.get('used_model_planner') else 'local'}\n"
+            f"Plan:\n" + ("\n".join(plan_lines) if plan_lines else "אין תוכנית נפרדת.") + "\n"
+            f"Recent observations:\n{recent_obs}\n"
+            f"Recent failures:\n{failures}"
+            f"{guidance}\n"
+            "[SMARTI_TASK_STATE_END]"
+        )
+
+    def _append_task_state_message(self, current_messages, task_state, include_guidance=True):
+        summary = self._task_state_summary(task_state, include_guidance=include_guidance)
+        if summary:
+            if self.mode == "gemini" and current_messages and current_messages[-1].get("role") == "user":
+                current_messages[-1].setdefault("parts", []).append({"text": summary})
+            elif self.mode != "gemini" and current_messages and current_messages[-1].get("role") == "user" and isinstance(current_messages[-1].get("content"), str):
+                current_messages[-1]["content"] = current_messages[-1].get("content", "") + "\n\n" + summary
+            else:
+                self._append_user_feedback_message(current_messages, summary)
+
+    def _message_text_for_budget(self, message):
+        if not isinstance(message, dict):
+            return str(message)
+        if "content" in message:
+            return str(message.get("content", ""))
+        parts = message.get("parts", [])
+        if isinstance(parts, list):
+            return "\n".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+        return str(message)
+
+    def _messages_char_budget(self, messages):
+        return sum(len(self._message_text_for_budget(msg)) for msg in messages or [])
+
+    def _compact_current_messages_if_needed(self, current_messages, task_state, iteration):
+        if not current_messages or not task_state:
+            return
+        try:
+            compact_after = int(self.settings.get("agent_context_compact_after_loops", 4) or 4)
+            max_messages = int(self.settings.get("agent_inline_history_message_limit", 24) or 24)
+            max_chars = int(self.settings.get("agent_inline_history_chars", 52000) or 52000)
+        except Exception:
+            compact_after, max_messages, max_chars = 4, 24, 52000
+        if iteration < max(2, compact_after):
+            return
+        if len(current_messages) <= max_messages and self._messages_char_budget(current_messages) <= max_chars:
+            return
+        tail_keep = 10 if task_state.get("planner_enabled") else 8
+        progress = (
+            "[SMARTI_PROGRESS_BEGIN]\n"
+            "היסטוריית הכלים הישנה קוצרה כדי לחסוך טוקנים. המשך לפי מצב המשימה והתצפיות האחרונות.\n"
+            f"{self._task_state_summary(task_state, include_guidance=True)}\n"
+            "[SMARTI_PROGRESS_END]"
+        )
+        if self.mode == "gemini":
+            tail = current_messages[-tail_keep:]
+            current_messages[:] = [{"role": "user", "parts": [{"text": progress}]}] + tail
+        else:
+            system_messages = [m for m in current_messages if m.get("role") == "system"][:1]
+            non_system = [m for m in current_messages if m.get("role") != "system"]
+            tail = non_system[-tail_keep:]
+            current_messages[:] = system_messages + [{"role": "user", "content": progress}] + tail
+        task_state["compactions"] = int(task_state.get("compactions", 0) or 0) + 1
+        logging.info(f"Agent inline context compacted at iteration {iteration}; messages={len(current_messages)}")
+
+    def _decode_tool_call_entry(self, call_entry, pre_text, schemas_seen, call_index=0):
+        json_str = (call_entry or {}).get("json_str", "")
+        tool_turn_text = (call_entry or {}).get("tool_turn_text", "") or ""
+        try:
+            tool_call = json.loads(json_str)
+            if tool_call.get("method") != "tools/call":
+                return None, "ERROR: Invalid JSON Tool Call. Missing 'method': 'tools/call' inside JSON root.", None
+            action = tool_call.get("params", {}).get("name", "")
+            args_dict = tool_call.get("params", {}).get("arguments", {})
+            args_dict = self._normalize_tool_call_args(action, args_dict)
+        except json.JSONDecodeError as e:
+            return None, f"ERROR: Invalid JSON Tool Call. Details: {e}. You MUST output exactly valid JSON objects representing tools/call requests.", None
+        except Exception as e:
+            return None, f"ERROR: Invalid tool call structure. Details: {e}", None
+
+        local_pre_text = pre_text if call_index == 0 else (call_entry or {}).get("pre_text", "")
+        if self._looks_like_user_question(local_pre_text) and action in (HIGH_RISK_TOOLS | {"open_file_or_folder", "open_in_browser"}):
+            return None, None, local_pre_text
+
+        needs_info, info_error = self._tool_requires_info_before_use(action, args_dict, schemas_seen)
+        step_text = self._normalize_step_text(local_pre_text)
+        if not step_text:
+            step_text = self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
+        if needs_info:
+            return None, f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם tool_name מתאים, ואז המשך.", None
+
+        valid_call, validation_error = self._validate_tool_call(action, args_dict)
+        if not valid_call:
+            schema_hint = self._tool_schema_hint(action, args_dict)
+            feedback = f"ERROR: Tool call schema validation failed for '{action}'. Details: {validation_error}. Retry once with exactly the documented schema below; do not guess extra fields."
+            if schema_hint:
+                feedback += f"\nSCHEMA:\n{schema_hint}"
+            return None, feedback, None
+
+        return {
+            "action": action,
+            "arguments": args_dict,
+            "step_text": step_text,
+            "tool_turn_text": tool_turn_text,
+            "index": call_index,
+        }, None, None
+
+    def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures):
+        action = call.get("action", "")
+        args_dict = call.get("arguments", {}) or {}
+        if getattr(self, "agent_runtime", None):
+            similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
+            if self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
+                return f"ERROR: Similar repeated tool call blocked for '{action}'. שנה אסטרטגיה או סיים עם הסבר ברור."
+            similar_tool_signatures.append(similar_sig)
+        call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
+        tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
+        if tool_call_counts[call_sig] > 2:
+            return f"ERROR: Repeated identical tool call blocked for '{action}'. בחר אסטרטגיה אחרת או סיים עם הסבר."
+        return None
+
+    def _effective_tool_action(self, action, args_dict):
+        if action in {"system_manager", "software_manager", "file_manager", "web_manager", "screen_manager", "background_task_manager", "memory_manager", "extension_manager", "automation_manager"}:
+            try:
+                routed_action, routed_args = self._route_unified_tool(action, args_dict)
+                return routed_action, routed_args
+            except Exception:
+                return action, args_dict
+        return action, args_dict
+
+    def _is_parallel_safe_tool_call(self, call):
+        action, args = self._effective_tool_action(call.get("action", ""), call.get("arguments", {}) or {})
+        safe_actions = {
+            "get_tool_info", "smart_file_search", "git_status", "list_processes",
+            "list_software", "search_memory", "internet_search", "read_website",
+            "get_weather"
+        }
+        if action not in safe_actions:
+            return False
+        capability = self._capability_for_action(action)
+        decision = self._policy_decision(capability)
+        if decision == "ask":
+            return False
+        if action in {"internet_search", "read_website", "get_weather"} and decision != "allow":
+            return False
+        return True
+
+    def _tool_is_mutating_or_control(self, action, args_dict):
+        effective, _ = self._effective_tool_action(action, args_dict or {})
+        return effective in {
+            "system_command", "run_project_check", "create_python_tool", "install_mcp",
+            "run_mcp", "install_skill", "install_skill_requirements", "run_skill",
+            "save_text_file", "save_screenshot_to_disk", "email_manager",
+            "browser_automation", "close_automation_browser", "computer_automation",
+            "schedule_background_task", "cancel_background_task", "retry_background_task",
+            "open_software", "open_file_or_folder", "open_in_browser", "set_clipboard",
+            "set_volume", "update_memory"
+        }
+
+    def _execute_prepared_tool_call(self, call, schemas_seen):
+        action = call.get("action", "")
+        args_dict = call.get("arguments", {}) or {}
+        try:
+            self._raise_if_cancelled()
+            feedback_for_ai, message_for_user = self.execute_tool(action, args_dict)
+            self._raise_if_cancelled()
+        except SmartiCancelled:
+            raise
+        except Exception as e:
+            logging.exception(f"Tool execution recovered after crash: {action}")
+            feedback_for_ai, message_for_user = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}", None
+        if action == "get_tool_info" and not str(feedback_for_ai).startswith("ERROR:"):
+            info_name = str(args_dict.get("tool_name", "")).strip(" []'\"")
+            for key in {info_name, safe_filename(info_name), self._resolve_mcp_package(info_name), mcp_pkg_to_file_stem(info_name)}:
+                if key:
+                    schemas_seen.add(key)
+        output = feedback_for_ai if feedback_for_ai is not None else message_for_user
+        status = "error" if str(output or "").startswith("ERROR") else "ok"
+        if output:
+            obs = "[תמונה צורפה]" if str(output).startswith("IMAGE_BASE64:") else self._truncate_tool_output(output)[:1200]
+            self._record_tool_observation(action, args_dict, status, obs)
+        return {
+            "action": action,
+            "arguments": args_dict,
+            "feedback": feedback_for_ai,
+            "message": message_for_user,
+            "status": status,
+            "step_text": call.get("step_text", ""),
+            "output": output,
+        }
+
+    def _execute_tool_call_batch(self, calls, schemas_seen, parallel=False):
+        if not parallel or len(calls) <= 1:
+            return [self._execute_prepared_tool_call(calls[0], schemas_seen)]
+        background_flag = getattr(self._execution_context, "is_background", False)
+        policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
+        loop_iteration = getattr(self._execution_context, "loop_iteration", None)
+
+        def run_one(call):
+            self._execution_context.is_background = background_flag
+            self._execution_context.loop_iteration = loop_iteration
+            if policy_snapshot is not None:
+                self._execution_context.policy_snapshot = policy_snapshot
+            return self._execute_prepared_tool_call(call, schemas_seen)
+
+        max_workers = min(len(calls), max(1, int(self.settings.get("max_parallel_tool_calls", 4) or 4)))
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(run_one, call): call for call in calls}
+            for future in concurrent.futures.as_completed(future_map):
+                try:
+                    results.append(future.result())
+                except SmartiCancelled:
+                    raise
+                except Exception as e:
+                    call = future_map[future]
+                    action = call.get("action", "")
+                    results.append({
+                        "action": action,
+                        "arguments": call.get("arguments", {}) or {},
+                        "feedback": f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}",
+                        "message": None,
+                        "status": "error",
+                        "step_text": call.get("step_text", ""),
+                        "output": str(e),
+                    })
+        results.sort(key=lambda item: next((idx for idx, call in enumerate(calls) if call.get("action") == item.get("action") and call.get("arguments") == item.get("arguments")), 999))
+        return results
+
+    def _append_tool_results_feedback(self, current_messages, tool_turn_text, results):
+        feedback_results = [r for r in results if r.get("feedback")]
+        if not feedback_results:
+            return False
+        if len(feedback_results) == 1:
+            item = feedback_results[0]
+            self._append_tool_feedback(current_messages, tool_turn_text, item.get("action", ""), item.get("feedback", ""))
+            return True
+        blocks = ["[SMARTI_PARALLEL_TOOL_RESULTS_BEGIN]"]
+        for idx, item in enumerate(feedback_results, start=1):
+            action = item.get("action", "")
+            is_error = str(item.get("feedback", "")).startswith("ERROR:")
+            compact = self._compact_tool_feedback_for_model(action, item.get("feedback", ""), is_error=is_error)
+            blocks.append(f"Result {idx}/{len(feedback_results)} for tool `{action}`:\n{self._wrap_tool_output_for_model(action, compact, is_error=is_error)}")
+        blocks.append("[SMARTI_PARALLEL_TOOL_RESULTS_END]")
+        payload = "\n\n".join(blocks)
+        if self.mode == "gemini":
+            current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
+            current_messages.append({"role": "user", "parts": [{"text": payload}]})
+        else:
+            current_messages.append({"role": "assistant", "content": tool_turn_text})
+            current_messages.append({"role": "user", "content": payload})
+        return True
+
+    def _record_results_in_task_state(self, task_state, results):
+        if not task_state:
+            return
+        for item in results:
+            action = item.get("action", "")
+            status = item.get("status", "")
+            step = item.get("step_text", "")
+            preview = self._truncate_tool_output(item.get("output", ""))[:500].replace("\n", " ")
+            line = f"- {action} | {status}"
+            if step:
+                line += f" | step={step}"
+            if preview:
+                line += f" | {preview}"
+            task_state.setdefault("observations", []).append(line[:900])
+            task_state["observations"] = task_state["observations"][-18:]
+            if status == "error":
+                task_state.setdefault("failures", []).append(line[:700])
+                task_state["failures"] = task_state["failures"][-8:]
+
+    def _maybe_evaluate_task_progress(self, task_state, results, current_model, iteration):
+        if not task_state or not task_state.get("planner_enabled") or not results:
+            return ""
+        try:
+            max_evals = int(self.settings.get("max_agent_evaluations_per_task", 4) or 4)
+        except Exception:
+            max_evals = 4
+        if int(task_state.get("evaluations", 0) or 0) >= max(0, max_evals):
+            return ""
+        meaningful = any(r.get("status") == "error" or self._tool_is_mutating_or_control(r.get("action", ""), r.get("arguments", {}) or {}) for r in results)
+        if not meaningful and iteration % 4 != 0:
+            return ""
+        recent_results = "\n".join(
+            f"- {r.get('action')} | {r.get('status')} | {self._truncate_tool_output(r.get('output', ''))[:700].replace(chr(10), ' ')}"
+            for r in results[-4:]
+        )
+        plan = "\n".join(f"{idx}. {step}" for idx, step in enumerate(task_state.get("plan_steps", [])[:7], start=1))
+        evaluator_prompt = (
+            "אתה Evaluator פנימי של סוכן. אל תפעיל כלים ואל תענה למשתמש.\n"
+            "בדוק אם תוצאות הכלים מקדמות את המשימה ומה ההנחיה הבאה. החזר JSON בלבד:\n"
+            "{\"status\":\"continue|retry|done|ask_user\",\"step_done\":true|false,\"next_step_index\":null|1,\"guidance\":\"...\"}\n"
+            "ה-guidance חייב להיות קצר ומעשי.\n\n"
+            f"מטרה:\n{task_state.get('objective', '')[:900]}\n\n"
+            f"תוכנית:\n{plan}\n\n"
+            f"תוצאות אחרונות:\n{recent_results}"
+        )
+        if self.mode == "gemini":
+            messages = [{"role": "user", "parts": [{"text": evaluator_prompt}]}]
+        else:
+            messages = [
+                {"role": "system", "content": "Internal evaluator. Return compact JSON only."},
+                {"role": "user", "content": evaluator_prompt}
+            ]
+        try:
+            raw, usage_dict = self._handle_api_request_with_retry(current_model, messages)
+            self._log_usage(current_model, usage_dict)
+            json_text = self._extract_first_json_object_text(raw)
+            data = json.loads(json_text) if json_text else {}
+            task_state["evaluations"] = int(task_state.get("evaluations", 0) or 0) + 1
+            guidance = re.sub(r'\s+', ' ', str(data.get("guidance", "") or "")).strip()[:500]
+            status = str(data.get("status", "continue") or "continue").strip().lower()
+            if data.get("step_done") and task_state.get("plan_steps"):
+                idx = int(task_state.get("current_step_idx", 0) or 0)
+                if 0 <= idx < len(task_state["plan_steps"]):
+                    step = task_state["plan_steps"][idx]
+                    if step not in task_state["completed_steps"]:
+                        task_state["completed_steps"].append(step)
+                next_idx = data.get("next_step_index", None)
+                if isinstance(next_idx, int) and next_idx > 0:
+                    task_state["current_step_idx"] = min(next_idx - 1, max(0, len(task_state["plan_steps"]) - 1))
+                else:
+                    task_state["current_step_idx"] = min(idx + 1, max(0, len(task_state["plan_steps"]) - 1))
+            if status in {"retry", "ask_user"} and guidance:
+                task_state.setdefault("failures", []).append(f"Evaluator: {guidance}")
+                task_state["failures"] = task_state["failures"][-8:]
+            task_state["last_evaluation"] = guidance
+            if guidance:
+                return (
+                    "[SMARTI_EVALUATOR_BEGIN]\n"
+                    f"status={status}\n"
+                    f"guidance={guidance}\n"
+                    "[SMARTI_EVALUATOR_END]"
+                )
+        except Exception as e:
+            if "CANCELLED_BY_USER" in str(e):
+                raise SmartiCancelled("CANCELLED_BY_USER")
+            logging.warning(f"Task evaluator skipped: {e}")
+        return ""
+
+    def _should_run_final_verifier_for_task(self, task_state, final_response, tool_call_counts, iteration):
+        if not final_response or str(final_response).startswith("ERROR_USER") or self._is_background_context():
+            return False
+        if self._looks_like_internal_artifact(final_response):
+            return True
+        if tool_call_counts:
+            return True
+        if task_state and task_state.get("planner_enabled") and iteration >= 2:
+            return True
+        if len(str(final_response).strip()) >= 220:
+            return True
+        return False
 
     def _static_code_safety_check(self, code, capability):
         banned_calls = {"eval", "exec", "compile", "__import__", "open", "input", "globals", "locals", "vars", "dir", "getattr", "setattr", "delattr"}
@@ -1863,6 +2414,8 @@ class SmartiCore:
         self.cancel_event.clear()
         try:
             self._execution_context.is_background = False
+            if hasattr(self._execution_context, "loop_iteration"):
+                delattr(self._execution_context, "loop_iteration")
             if hasattr(self._execution_context, "policy_snapshot"):
                 delattr(self._execution_context, "policy_snapshot")
         except Exception:
@@ -3314,13 +3867,15 @@ CWD: {current_dir}
 
 **פרוטוקול עבודה קצר:**
 הבן -> תכנן -> בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
-כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON יחיד. אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
+במשימות בעלות כמה שכבות פעל היררכית לפי מצב המשימה הפנימי: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
+כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON. אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
 ```json
 {{
   "method": "tools/call",
   "params": {{"name": "<tool>", "arguments": {{}}}}
 }}
 ```
+מותר להחזיר כמה בלוקי JSON רק כאשר מדובר בכמה פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור משתמש ואינן תלויות זו בזו. פעולות כתיבה, מערכת, אימייל, התקנות, זיכרון, GUI/דפדפן, פתיחת קבצים/תוכנות או כל פעולה עם סיכון/הרשאות יש לבצע אחת-אחת.
 
 **חוקים נוספים לכלים:**
 1. אם השאלה היא שיחה כללית או "מה היכולות שלך", ענה ישירות לפי רשימת הכלים וה-Skills שבהנחיה; אל תפעיל כלי רק כדי לענות.
@@ -3344,6 +3899,7 @@ CWD: {current_dir}
 12b. Memory retrieval is hierarchical local RAG, not chat-history dumping: user memory = stable identity/preferences, long_term = durable project facts/decisions, short_term = recent continuity, tool = recent tool observations. Use `search_memory` when the task clearly depends on prior context that was not retrieved automatically. Use `update_memory` when the user reveals a durable fact/preference/constraint or a reusable project decision. Do not save ordinary one-off conversation text.
 13. כלים חיצוניים, MCP ו-Skills שמסומנים legacy/untrusted אינם זמינים להרצה עד אישור המשתמש במסך הכלים. אם כלי נחסם בגלל trust, הסבר זאת ובקש מהמשתמש לאשר אותו.
 14. העדף כלים מובנים מובנים (`git_status`, `run_project_check`, `list_processes`, `set_clipboard`, `extract_image_text`) על פני פקודת shell חופשית כאשר הם מתאימים.
+15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]` או הערכת `[SMARTI_EVALUATOR]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש.
 
 **[רשימת הכלים הזמינים במערכת]**
 {active_tools_prompt}
@@ -3456,10 +4012,10 @@ CWD: {current_dir}
                     raise Exception(redact_sensitive_text(str(e), self.settings))
         raise Exception("RATE_LIMIT_ABORTED")
 
-    def _verify_final_response(self, objective, final_response):
+    def _verify_final_response(self, objective, final_response, force=False):
         if not self.settings.get("enable_final_verifier", True) or self._is_background_context():
             return final_response
-        if len(str(final_response or "").strip()) < 220 and not self._looks_like_internal_artifact(final_response):
+        if not force and len(str(final_response or "").strip()) < 220 and not self._looks_like_internal_artifact(final_response):
             return final_response
         try:
             observations = "\n".join(self.recent_tool_observations[-8:])
@@ -3515,302 +4071,309 @@ CWD: {current_dir}
             return "ERROR_USER: סמארטי כבר מבצע משימה אחרת. נסה שוב בעוד רגע או בטל את הפעולה הפעילה."
         previous_background_flag = getattr(self._execution_context, "is_background", False)
         previous_policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
-        self._execution_context.is_background = is_background_task
         run_cancel_event = threading.Event()
-        if not is_background_task:
-            self._foreground_cancel_event = run_cancel_event
-            self.cancel_event = run_cancel_event
-        try:
-            if getattr(self, "memory_manager", None):
-                self.memory_manager.capture_critical_user_details(user_text, source="critical_preflight")
-        except Exception as e:
-            logging.warning(f"Critical memory capture skipped: {e}")
-        self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
-        try:
-            configured_iterations = int(self.settings.get("max_agent_loops", 15))
-        except Exception:
-            configured_iterations = 15
-        MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations > 30 else max(1, configured_iterations)
         iteration = 0
         final_response = ""
-        tool_call_counts = {}
-        similar_tool_signatures = []
-        tool_observation_start = len(getattr(self, "tool_observations", []) or [])
-        schemas_seen = set()
-        internal_artifact_replies = 0
-        task_started = time.time()
-        total_timeout = self._timeout("max_total_task_seconds", 900)
-
-        logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
-        if getattr(self, "agent_runtime", None):
-            self.agent_runtime.trace("plan", user_text[:1000])
-
-        if self.mode == "gemini":
-            current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
-            current_messages.append({"role": "user", "parts": [{"text": user_text}]})
-        else:
-            history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
-            current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
-            current_messages.append({"role": "user", "content": user_text})
-
-        while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
-            if run_cancel_event.is_set():
-                final_response = "הפעולה נעצרה לבקשת המשתמש."
-                break
-            if time.time() - task_started > total_timeout:
-                final_response = "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
-                break
-            iteration += 1
-            self._execution_context.loop_iteration = iteration
-            logging.info(f"--- תחילת לולאה {iteration}/{MAX_ITERATIONS if MAX_ITERATIONS is not None else 'ללא הגבלה'} ---")
-            
-            if self.status_callback: self.status_callback("חושב..." if iteration == 1 else f"חושב... (שלב {iteration})")
-            
+        current_model = ""
+        task_state = None
+        try:
+            self._execution_context.is_background = is_background_task
+            if not is_background_task:
+                self._foreground_cancel_event = run_cancel_event
+                self.cancel_event = run_cancel_event
             try:
-                current_model = self.settings.get(f'selected_{self.mode}_model', 'Local')
-                if getattr(self, "agent_runtime", None):
-                    self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
-                ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
-                self._log_usage(current_model, usage_dict)
-                logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
+                if getattr(self, "memory_manager", None):
+                    self.memory_manager.capture_critical_user_details(user_text, source="critical_preflight")
             except Exception as e:
-                if "TIMEOUT" in str(e): final_response = "ERROR_USER: השרתים אינם מגיבים."
-                elif "CANCELLED_BY_USER" in str(e): final_response = "הפעולה נעצרה לבקשת המשתמש."
-                elif "RATE_LIMIT_ABORTED" in str(e): final_response = "ERROR_USER: שרתי ה-AI עמוסים מידי או שחרגת ממגבלת הקצב."
-                else: final_response = f"ERROR_USER: שגיאת חיבור מול ה-API: {e}"
-                break
+                logging.warning(f"Critical memory capture skipped: {e}")
 
-            ai_response_text = re.sub(r'<\|channel>thought.*?<channel\|>', '', ai_response_text, flags=re.DOTALL)
-            ai_response_text = re.sub(r'<\|channel>thought.*?<\|channel>model', '', ai_response_text, flags=re.DOTALL)
-            ai_response_text = re.sub(r'<think>.*?</think>', '', ai_response_text, flags=re.DOTALL).strip()
+            self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
+            try:
+                configured_iterations = int(self.settings.get("max_agent_loops", 15))
+            except Exception:
+                configured_iterations = 15
+            MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations > 30 else max(1, configured_iterations)
+            tool_call_counts = {}
+            similar_tool_signatures = []
+            tool_observation_start = len(getattr(self, "tool_observations", []) or [])
+            schemas_seen = set()
+            internal_artifact_replies = 0
+            task_started = time.time()
+            total_timeout = self._timeout("max_total_task_seconds", 900)
+            current_model = self.settings.get(f'selected_{self.mode}_model', 'Local')
 
-            if "%%%" in ai_response_text:
-                ai_response_text = ai_response_text.replace("%%%", "")
+            logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
+            if getattr(self, "agent_runtime", None):
+                self.agent_runtime.trace("plan", user_text[:1000])
 
-            # --- SMART JSON PARSER (SAFE MODE) ---
-            parsed_tool = self.agent_runtime.extract_tool_call(ai_response_text) if getattr(self, "agent_runtime", None) else {}
-            json_str = parsed_tool.get("json_str", "")
-            pre_text = parsed_tool.get("pre_text", "")
-            is_tool_call_intent = parsed_tool.get("is_tool_call_intent", False)
-            tool_turn_text = parsed_tool.get("tool_turn_text", ai_response_text)
-            extra_tool_blocks = parsed_tool.get("extra_tool_blocks", 0)
-            
-            if is_tool_call_intent and json_str:
-                pre_text = pre_text.replace("##", "").strip()
-                
-                action = None
-                args_dict = {}
-                parse_error = None
-                
-                try:
-                    tool_call = json.loads(json_str)
-                    if tool_call.get("method") == "tools/call":
-                        action = tool_call.get("params", {}).get("name", "")
-                        args_dict = tool_call.get("params", {}).get("arguments", {})
-                        args_dict = self._normalize_tool_call_args(action, args_dict)
-                    else:
-                        parse_error = "Missing 'method': 'tools/call' inside JSON root."
-                except json.JSONDecodeError as e:
-                    parse_error = str(e)
+            task_state = self._initialize_task_state(user_text, current_model, is_background_task=is_background_task)
 
-                if parse_error or not action:
-                    feedback_for_ai = f"ERROR: Invalid JSON Tool Call. Details: {parse_error}. You MUST output exactly ONE valid JSON object representing a tools/call request."
-                    logging.warning(f"Cognitive JSON Parse Error: {parse_error} in \n{json_str}")
-                    if self.mode == "gemini":
-                        current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-                        current_messages.append({"role": "user", "parts": [{"text": feedback_for_ai}]})
-                    else:
-                        current_messages.append({"role": "assistant", "content": tool_turn_text})
-                        current_messages.append({"role": "user", "content": feedback_for_ai})
-                    continue
+            if self.mode == "gemini":
+                current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
+                current_messages.append({"role": "user", "parts": [{"text": user_text}]})
+            else:
+                history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
+                current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
+                current_messages.append({"role": "user", "content": user_text})
+            self._append_task_state_message(current_messages, task_state, include_guidance=True)
 
-                if self._looks_like_user_question(pre_text) and action in (HIGH_RISK_TOOLS | {"open_file_or_folder", "open_in_browser"}):
-                    final_response = pre_text
-                    logging.info("המודל שאל שאלה למשתמש לצד כלי; עוצר לפני הפעלה.")
-                    break
-
-                needs_info, info_error = self._tool_requires_info_before_use(action, args_dict, schemas_seen)
-                step_text = self._normalize_step_text(pre_text)
-                if not step_text:
-                    step_text = self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
-                if step_text and self.step_callback:
-                    self.step_callback(step_text)
-
-                if getattr(self, "agent_runtime", None):
-                    self.agent_runtime.trace("select_tool", f"{action} {json.dumps(args_dict, ensure_ascii=False)[:1200]}")
-
-                if needs_info:
-                    feedback_for_ai = f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם tool_name מתאים, ואז המשך."
-                    logging.info(feedback_for_ai)
-                    if self.mode == "gemini":
-                        current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-                        current_messages.append({"role": "user", "parts": [{"text": feedback_for_ai}]})
-                    else:
-                        current_messages.append({"role": "assistant", "content": tool_turn_text})
-                        current_messages.append({"role": "user", "content": feedback_for_ai})
-                    continue
-
-                valid_call, validation_error = self._validate_tool_call(action, args_dict)
-                if not valid_call:
-                    schema_hint = self._tool_schema_hint(action, args_dict)
-                    feedback_for_ai = f"ERROR: Tool call schema validation failed for '{action}'. Details: {validation_error}. Retry once with exactly the documented schema below; do not guess extra fields."
-                    if schema_hint:
-                        feedback_for_ai += f"\nSCHEMA:\n{schema_hint}"
-                    logging.warning(feedback_for_ai)
-                    if self.mode == "gemini":
-                        current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-                        current_messages.append({"role": "user", "parts": [{"text": feedback_for_ai}]})
-                    else:
-                        current_messages.append({"role": "assistant", "content": tool_turn_text})
-                        current_messages.append({"role": "user", "content": feedback_for_ai})
-                    continue
-
-                if getattr(self, "agent_runtime", None):
-                    similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
-                    if self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
-                        feedback_for_ai = (f"ERROR: Similar repeated tool call blocked for '{action}'. שנה אסטרטגיה או סיים עם הסבר ברור.")
-                        if self.mode == "gemini":
-                            current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-                            current_messages.append({"role": "user", "parts": [{"text": feedback_for_ai}]})
-                        else:
-                            current_messages.append({"role": "assistant", "content": tool_turn_text})
-                            current_messages.append({"role": "user", "content": feedback_for_ai})
-                        continue
-                    similar_tool_signatures.append(similar_sig)
-
-                call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
-                tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
-                if tool_call_counts[call_sig] > 2:
-                    feedback_for_ai = (f"ERROR: Repeated identical tool call blocked for '{action}'. בחר אסטרטגיה אחר או סיים עם הסבר.")
-                    if self.mode == "gemini":
-                        current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-                        current_messages.append({"role": "user", "parts": [{"text": feedback_for_ai}]})
-                    else:
-                        current_messages.append({"role": "assistant", "content": tool_turn_text})
-                        current_messages.append({"role": "user", "content": feedback_for_ai})
-                    continue
-
-                logging.info(f">>> סמארטי מפעיל כלי: {action} | פרמטרים: {args_dict}")
-                if self.status_callback:
-                    if action == "get_tool_info": self.status_callback(f"מאתחל טעינה דינמית: {args_dict.get('tool_name', '')}...")
-                    else: self.status_callback(f"מפעיל כלי: {action}...")
-                
-                try:
-                    self._raise_if_cancelled()
-                    feedback_for_ai, message_for_user = self.execute_tool(action, args_dict)
-                    self._raise_if_cancelled()
-                except SmartiCancelled:
+            while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
+                if run_cancel_event.is_set():
                     final_response = "הפעולה נעצרה לבקשת המשתמש."
                     break
-                if getattr(self, "agent_runtime", None):
-                    self.agent_runtime.trace("observe", f"{action}: {str(feedback_for_ai or message_for_user or '')[:1200]}")
-                if action == "get_tool_info" and not str(feedback_for_ai).startswith("ERROR:"):
-                    info_name = str(args_dict.get("tool_name", "")).strip(" []'\"")
-                    for key in {info_name, safe_filename(info_name), self._resolve_mcp_package(info_name), mcp_pkg_to_file_stem(info_name)}:
-                        if key:
-                            schemas_seen.add(key)
-                
-                if feedback_for_ai:
-                    log_text = feedback_for_ai if not feedback_for_ai.startswith("IMAGE_BASE64:") else "[תמונה צורפה - BASE64]"
-                    logging.info(f"<<< תוצאת הכלי '{action}' (מוחזרת למודל): {log_text[:500]}..." if len(log_text) > 500 else f"<<< תוצאת הכלי '{action}' (מוחזרת למודל): {log_text}")
-                    
-                    if self.status_callback: self.status_callback(f"מעבד תוצאות...")
-                    obs = "[תמונה צורפה]" if feedback_for_ai.startswith("IMAGE_BASE64:") else self._truncate_tool_output(feedback_for_ai)[:1200]
-                    self._record_tool_observation(action, args_dict, "error" if feedback_for_ai.startswith("ERROR:") else "ok", obs)
-                    self._append_tool_feedback(current_messages, tool_turn_text, action, feedback_for_ai)
-                    if extra_tool_blocks:
+                if time.time() - task_started > total_timeout:
+                    final_response = "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
+                    break
+                iteration += 1
+                self._execution_context.loop_iteration = iteration
+                logging.info(f"--- תחילת לולאה {iteration}/{MAX_ITERATIONS if MAX_ITERATIONS is not None else 'ללא הגבלה'} ---")
+
+                if self.status_callback:
+                    self.status_callback("חושב..." if iteration == 1 else f"חושב... (שלב {iteration})")
+
+                try:
+                    if getattr(self, "agent_runtime", None):
+                        self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
+                    ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
+                    self._log_usage(current_model, usage_dict)
+                    logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
+                except Exception as e:
+                    if "TIMEOUT" in str(e):
+                        final_response = "ERROR_USER: השרתים אינם מגיבים."
+                    elif "CANCELLED_BY_USER" in str(e):
+                        final_response = "הפעולה נעצרה לבקשת המשתמש."
+                    elif "RATE_LIMIT_ABORTED" in str(e):
+                        final_response = "ERROR_USER: שרתי ה-AI עמוסים מידי או שחרגת ממגבלת הקצב."
+                    else:
+                        final_response = f"ERROR_USER: שגיאת חיבור מול ה-API: {e}"
+                    break
+
+                ai_response_text = re.sub(r'<\|channel>thought.*?<channel\|>', '', ai_response_text, flags=re.DOTALL)
+                ai_response_text = re.sub(r'<\|channel>thought.*?<\|channel>model', '', ai_response_text, flags=re.DOTALL)
+                ai_response_text = re.sub(r'<think>.*?</think>', '', ai_response_text, flags=re.DOTALL).strip()
+
+                if "%%%" in ai_response_text:
+                    ai_response_text = ai_response_text.replace("%%%", "")
+
+                parsed_tool = self.agent_runtime.extract_tool_calls(ai_response_text) if getattr(self, "agent_runtime", None) else {}
+                pre_text = parsed_tool.get("pre_text", "").replace("##", "").strip()
+                is_tool_call_intent = parsed_tool.get("is_tool_call_intent", False)
+                tool_turn_text = parsed_tool.get("tool_turn_text", ai_response_text)
+                raw_tool_calls = parsed_tool.get("tool_calls", []) or []
+
+                if is_tool_call_intent and raw_tool_calls:
+                    first_call, feedback_for_ai, final_candidate = self._decode_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
+                    if final_candidate:
+                        final_response = final_candidate
+                        logging.info("המודל שאל שאלה למשתמש לצד כלי; עוצר לפני הפעלה.")
+                        break
+                    if feedback_for_ai or not first_call:
+                        logging.warning(feedback_for_ai)
+                        self._append_tool_feedback(current_messages, tool_turn_text, "tool_parser", feedback_for_ai or "ERROR: Invalid tool call.")
+                        continue
+
+                    selected_calls = [first_call]
+                    parallel = False
+                    skipped_extra_calls = max(0, len(raw_tool_calls) - 1)
+                    try:
+                        max_parallel = max(1, int(self.settings.get("max_parallel_tool_calls", 4) or 4))
+                    except Exception:
+                        max_parallel = 4
+
+                    if len(raw_tool_calls) > 1:
+                        candidate_calls = [first_call]
+                        extras_ok = len(raw_tool_calls) <= max_parallel
+                        for idx, raw_call in enumerate(raw_tool_calls[1:max_parallel], start=1):
+                            extra_call, extra_feedback, extra_final = self._decode_tool_call_entry(raw_call, pre_text, schemas_seen, call_index=idx)
+                            if extra_final or extra_feedback or not extra_call:
+                                extras_ok = False
+                                break
+                            candidate_calls.append(extra_call)
+                        if extras_ok and len(candidate_calls) > 1 and all(self._is_parallel_safe_tool_call(call) for call in candidate_calls):
+                            selected_calls = candidate_calls
+                            parallel = True
+                            skipped_extra_calls = max(0, len(raw_tool_calls) - len(candidate_calls))
+
+                    unique_calls = []
+                    seen_batch_sigs = set()
+                    for call in selected_calls:
+                        batch_sig = f"{call.get('action', '')}\0{json.dumps(call.get('arguments', {}) or {}, sort_keys=True, ensure_ascii=False)}"
+                        if batch_sig in seen_batch_sigs:
+                            skipped_extra_calls += 1
+                            continue
+                        seen_batch_sigs.add(batch_sig)
+                        unique_calls.append(call)
+                    selected_calls = unique_calls or selected_calls[:1]
+                    parallel = parallel and len(selected_calls) > 1
+
+                    reserve_feedback = None
+                    candidate_tool_call_counts = dict(tool_call_counts)
+                    candidate_similar_tool_signatures = list(similar_tool_signatures)
+                    for call in selected_calls:
+                        reserve_feedback = self._reserve_tool_call(call, candidate_tool_call_counts, candidate_similar_tool_signatures)
+                        if reserve_feedback:
+                            break
+                    if reserve_feedback:
+                        self._append_tool_feedback(current_messages, tool_turn_text, selected_calls[0].get("action", "tool"), reserve_feedback)
+                        continue
+                    tool_call_counts = candidate_tool_call_counts
+                    similar_tool_signatures = candidate_similar_tool_signatures
+
+                    if selected_calls[0].get("step_text") and self.step_callback:
+                        if parallel and len(selected_calls) > 1:
+                            self.step_callback(f"מבצע {len(selected_calls)} בדיקות במקביל")
+                        else:
+                            self.step_callback(selected_calls[0].get("step_text", ""))
+
+                    if getattr(self, "agent_runtime", None):
+                        for call in selected_calls:
+                            self.agent_runtime.trace("select_tool", f"{call.get('action')} {json.dumps(call.get('arguments', {}), ensure_ascii=False)[:1200]}")
+
+                    if self.status_callback:
+                        if parallel and len(selected_calls) > 1:
+                            self.status_callback(f"מפעיל {len(selected_calls)} כלים במקביל...")
+                        else:
+                            action = selected_calls[0].get("action", "")
+                            if action == "get_tool_info":
+                                self.status_callback(f"מאתחל טעינה דינמית: {selected_calls[0].get('arguments', {}).get('tool_name', '')}...")
+                            else:
+                                self.status_callback(f"מפעיל כלי: {action}...")
+
+                    try:
+                        results = self._execute_tool_call_batch(selected_calls, schemas_seen, parallel=parallel)
+                    except SmartiCancelled:
+                        final_response = "הפעולה נעצרה לבקשת המשתמש."
+                        break
+
+                    if getattr(self, "agent_runtime", None):
+                        for result in results:
+                            self.agent_runtime.trace("observe", f"{result.get('action')}: {str(result.get('output') or '')[:1200]}")
+                    self._record_results_in_task_state(task_state, results)
+
+                    if any(result.get("feedback") for result in results):
+                        if self.status_callback:
+                            self.status_callback("מעבד תוצאות...")
+                        self._append_tool_results_feedback(current_messages, tool_turn_text, results)
+                        if skipped_extra_calls:
+                            self._append_user_feedback_message(
+                                current_messages,
+                                "הנחיית מערכת: בתגובה הקודמת הופיעו קריאות כלי נוספות שלא בוצעו. "
+                                "המערכת מריצה במקביל רק פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור. "
+                                "אם נדרש שלב נוסף, הפעל אותו עכשיו לפי התוצאות שכבר התקבלו."
+                            )
+                        evaluator_feedback = self._maybe_evaluate_task_progress(task_state, results, current_model, iteration)
+                        if evaluator_feedback:
+                            self._append_user_feedback_message(current_messages, evaluator_feedback)
+                        self._compact_current_messages_if_needed(current_messages, task_state, iteration)
+                        continue
+
+                    final_messages = [result.get("message") for result in results if result.get("message")]
+                    if final_messages:
+                        final_response = str(final_messages[0])
+                        break
+                    final_response = "הפעולה האחרונה הושלמה, אך לא התקבל פלט להמשך."
+                    break
+
+                else:
+                    if self._looks_like_internal_artifact(ai_response_text):
+                        internal_artifact_replies += 1
+                        cleaned = self._strip_internal_artifacts(ai_response_text)
+                        if cleaned and len(cleaned) >= 12 and not self._looks_like_internal_artifact(cleaned):
+                            final_response = cleaned.replace("##", "").strip()
+                            logging.info("נוקה פלט פנימי מתוך תשובה סופית.")
+                            break
+                        if internal_artifact_replies >= 2:
+                            final_response = self._fallback_final_response(user_text)
+                            logging.warning("Internal artifact leaked twice; using fallback final response.")
+                            break
+                        logging.warning("Internal artifact leaked as final response; requesting clean user-facing answer.")
+                        assistant_marker = "Internal artifact was blocked. Rewrite a clean final answer for the user only."
+                        if self.mode == "gemini":
+                            current_messages.append({"role": "model", "parts": [{"text": assistant_marker}]})
+                        else:
+                            current_messages.append({"role": "assistant", "content": assistant_marker})
                         self._append_user_feedback_message(
                             current_messages,
-                            "הנחיית מערכת: בתגובה הקודמת הופיעו כמה קריאות כלי. רק הקריאה הראשונה בוצעה. "
-                            "אם נדרש שלב נוסף, הפעל עכשיו קריאת כלי אחת בלבד; אל תחזיר פלט כלי עטוף כתשובה למשתמש."
+                            "ERROR: התגובה האחרונה חשפה פלט כלי/הנחיות פנימיות. אסור להציג למשתמש [UNTRUSTED_*], SKILL_* או tools/call. "
+                            "ענה עכשיו בעברית פשוטה בתשובה סופית קצרה שמבוססת רק על תצפיות הכלים, בלי תגים פנימיים."
                         )
-                    continue
-                else:
-                    if message_for_user:
-                        self._record_tool_observation(action, args_dict, "error" if str(message_for_user).startswith("ERROR") else "ok", message_for_user)
-                    final_response = message_for_user
+                        continue
+                    final_response = ai_response_text.replace("##", "").strip()
+                    logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
                     break
-            else:
-                if self._looks_like_internal_artifact(ai_response_text):
-                    internal_artifact_replies += 1
-                    cleaned = self._strip_internal_artifacts(ai_response_text)
-                    if cleaned and len(cleaned) >= 12 and not self._looks_like_internal_artifact(cleaned):
-                        final_response = cleaned.replace("##", "").strip()
-                        logging.info("נוקה פלט פנימי מתוך תשובה סופית.")
-                        break
-                    if internal_artifact_replies >= 2:
-                        final_response = self._fallback_final_response(user_text)
-                        logging.warning("Internal artifact leaked twice; using fallback final response.")
-                        break
-                    logging.warning("Internal artifact leaked as final response; requesting clean user-facing answer.")
-                    assistant_marker = "Internal artifact was blocked. Rewrite a clean final answer for the user only."
-                    if self.mode == "gemini":
-                        current_messages.append({"role": "model", "parts": [{"text": assistant_marker}]})
-                    else:
-                        current_messages.append({"role": "assistant", "content": assistant_marker})
-                    self._append_user_feedback_message(
-                        current_messages,
-                        "ERROR: התגובה האחרונה חשפה פלט כלי/הנחיות פנימיות. אסור להציג למשתמש [UNTRUSTED_*], SKILL_* או tools/call. "
-                        "ענה עכשיו בעברית פשוטה בתשובה סופית קצרה שמבוססת רק על תצפיות הכלים, בלי תגים פנימיים."
-                    )
-                    continue
-                final_response = ai_response_text.replace("##", "").strip()
-                logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
-                break
 
-        if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
-            final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
+            if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
+                final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
-        if final_response and tool_call_counts and not final_response.startswith("ERROR_USER") and not run_cancel_event.is_set():
+            if self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration) and not run_cancel_event.is_set():
+                try:
+                    final_response = self._verify_final_response(user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
+                except SmartiCancelled:
+                    final_response = "הפעולה נעצרה לבקשת המשתמש."
+                final_response = self._strip_internal_artifacts(final_response)
+                final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
+                if not final_response or self._looks_like_internal_artifact(final_response):
+                    final_response = self._fallback_final_response(user_text)
+
+            if final_response and not final_response.startswith("ERROR_USER") and not run_cancel_event.is_set():
+                try:
+                    new_tool_observations = list((getattr(self, "tool_observations", []) or [])[tool_observation_start:])
+                    if getattr(self, "memory_manager", None):
+                        self.memory_manager.auto_capture_turn(
+                            user_text,
+                            final_response,
+                            tool_records=new_tool_observations,
+                            is_background_task=is_background_task,
+                        )
+                except Exception as e:
+                    logging.warning(f"Memory auto-capture skipped: {e}")
+
+            if final_response and not final_response.startswith("ERROR_USER") and not is_background_task:
+                if self.mode == "gemini":
+                    self.gemini_history.append({"role": "user", "content": user_text})
+                    self.gemini_history.append({"role": "model", "content": final_response})
+                else:
+                    self.universal_history = [m for m in self.universal_history if m.get("role") != "system"]
+                    self.universal_history.insert(0, {"role": "system", "content": self.system_prompt})
+                    self.universal_history.append({"role": "user", "content": user_text})
+                    self.universal_history.append({"role": "assistant", "content": final_response})
+                self._compact_conversation_history()
+
+            return final_response
+        except SmartiCancelled:
+            final_response = "הפעולה נעצרה לבקשת המשתמש."
+            return final_response
+        except Exception as e:
+            logging.exception("Agent loop crashed unexpectedly inside send_message.")
+            final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
+            return final_response
+        finally:
+            if self.status_callback:
+                self.status_callback("")
+            if getattr(self, "agent_runtime", None):
+                try:
+                    self.agent_runtime.trace("final", str(final_response or "")[:1000])
+                except Exception:
+                    pass
+            self._execution_context.is_background = previous_background_flag
             try:
-                final_response = self._verify_final_response(user_text, final_response)
-            except SmartiCancelled:
-                final_response = "הפעולה נעצרה לבקשת המשתמש."
-            final_response = self._strip_internal_artifacts(final_response)
-            final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
-            if not final_response or self._looks_like_internal_artifact(final_response):
-                final_response = self._fallback_final_response(user_text)
-
-        if final_response and not final_response.startswith("ERROR_USER") and not run_cancel_event.is_set():
-            try:
-                new_tool_observations = list((getattr(self, "tool_observations", []) or [])[tool_observation_start:])
-                if getattr(self, "memory_manager", None):
-                    self.memory_manager.auto_capture_turn(
-                        user_text,
-                        final_response,
-                        tool_records=new_tool_observations,
-                        is_background_task=is_background_task,
-                    )
-            except Exception as e:
-                logging.warning(f"Memory auto-capture skipped: {e}")
-
-        if final_response and not final_response.startswith("ERROR_USER") and not is_background_task:
-            if self.mode == "gemini":
-                self.gemini_history.append({"role": "user", "content": user_text})
-                self.gemini_history.append({"role": "model", "content": final_response})
-            else:
-                self.universal_history = [m for m in self.universal_history if m.get("role") != "system"]
-                self.universal_history.insert(0, {"role": "system", "content": self.system_prompt})
-                self.universal_history.append({"role": "user", "content": user_text})
-                self.universal_history.append({"role": "assistant", "content": final_response})
-            self._compact_conversation_history()
-
-        if self.status_callback: self.status_callback("")
-        if getattr(self, "agent_runtime", None):
-            self.agent_runtime.trace("final", final_response[:1000])
-        self._execution_context.is_background = previous_background_flag
-        if previous_policy_snapshot is None:
-            try:
-                delattr(self._execution_context, "policy_snapshot")
+                delattr(self._execution_context, "loop_iteration")
             except Exception:
                 pass
-        else:
-            self._execution_context.policy_snapshot = previous_policy_snapshot
-        if not is_background_task and self._foreground_cancel_event is run_cancel_event:
-            self._foreground_cancel_event = None
-        if lock_acquired:
-            self._agent_lock.release()
-        return final_response
+            if previous_policy_snapshot is None:
+                try:
+                    delattr(self._execution_context, "policy_snapshot")
+                except Exception:
+                    pass
+            else:
+                self._execution_context.policy_snapshot = previous_policy_snapshot
+            if not is_background_task and self._foreground_cancel_event is run_cancel_event:
+                self._foreground_cancel_event = None
+            if lock_acquired:
+                try:
+                    self._agent_lock.release()
+                except RuntimeError:
+                    pass
 
     def run_browser_automation(self, code):
         if not self.settings.get("enable_browser_automation", False): return "ERROR: Browser automation is disabled by the user in settings."
