@@ -756,6 +756,28 @@ class SmartiCore:
         else:
             current_messages.append({"role": "user", "content": text})
 
+    def _trace_agent_phase(self, stage, detail=""):
+        try:
+            if getattr(self, "agent_runtime", None):
+                self.agent_runtime.trace(stage, detail)
+            else:
+                logging.info(f"TRACE | {stage} | {detail}")
+        except Exception:
+            pass
+
+    def _emit_agent_phase(self, stage, detail="", user_step=None, status_text=None, show_step=True):
+        self._trace_agent_phase(stage, detail)
+        if status_text and self.status_callback:
+            try:
+                self.status_callback(status_text)
+            except Exception:
+                pass
+        if show_step and user_step and self.step_callback and not self._is_background_context():
+            try:
+                self.step_callback(user_step)
+            except Exception:
+                pass
+
     def _looks_like_internal_artifact(self, text):
         text = (text or "").strip()
         if not text:
@@ -1674,16 +1696,20 @@ class SmartiCore:
                 {"role": "user", "content": planner_prompt}
             ]
         try:
+            self._trace_agent_phase("planner", f"model_request model={current_model}")
             raw, usage_dict = self._handle_api_request_with_retry(current_model, messages)
             self._log_usage(current_model, usage_dict)
             json_text = self._extract_first_json_object_text(raw)
             data = json.loads(json_text) if json_text else {}
             steps = [re.sub(r'\s+', ' ', str(step)).strip() for step in data.get("steps", []) if str(step).strip()]
             if steps:
-                return steps[:7], str(data.get("risk", "medium") or "medium"), str(data.get("notes", "") or "")[:500], True
+                risk = str(data.get("risk", "medium") or "medium")
+                self._trace_agent_phase("planner", f"model_result steps={len(steps[:7])} risk={risk} raw_chars={len(raw or '')}")
+                return steps[:7], risk, str(data.get("notes", "") or "")[:500], True
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
+            self._trace_agent_phase("planner", f"model_skipped error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task planner skipped: {e}")
         return self._fallback_task_plan(objective), "medium", "", False
 
@@ -1698,8 +1724,23 @@ class SmartiCore:
             model_threshold = int(self.settings.get("agent_model_planner_min_score", 4) or 4)
         except Exception:
             model_threshold = 4
+        if planner_enabled:
+            self._emit_agent_phase(
+                "planner",
+                f"start score={score} model_threshold={model_threshold} background={bool(is_background_task)}",
+                user_step="מתכנן את שלבי המשימה",
+                status_text="מתכנן שלבי ביצוע...",
+                show_step=not is_background_task,
+            )
+        else:
+            self._trace_agent_phase("planner", f"skipped score={score} enabled=false_or_below_threshold")
         if planner_enabled and not is_background_task and score >= max(2, model_threshold):
             steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model)
+        if planner_enabled:
+            self._trace_agent_phase(
+                "planner",
+                f"complete source={'model' if used_model_planner else 'local'} steps={len(steps)} risk={risk}"
+            )
         return {
             "objective": objective,
             "complexity_score": score,
@@ -2007,16 +2048,25 @@ class SmartiCore:
 
     def _maybe_evaluate_task_progress(self, task_state, results, current_model, iteration):
         if not task_state or not task_state.get("planner_enabled") or not results:
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=no_planner_or_results")
             return ""
         try:
             max_evals = int(self.settings.get("max_agent_evaluations_per_task", 4) or 4)
         except Exception:
             max_evals = 4
         if int(task_state.get("evaluations", 0) or 0) >= max(0, max_evals):
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=max_evaluations count={task_state.get('evaluations', 0)}")
             return ""
         meaningful = any(r.get("status") == "error" or self._tool_is_mutating_or_control(r.get("action", ""), r.get("arguments", {}) or {}) for r in results)
         if not meaningful and iteration % 4 != 0:
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=low_signal results={len(results)}")
             return ""
+        self._emit_agent_phase(
+            "evaluator",
+            f"start iteration={iteration} results={len(results)} meaningful={meaningful}",
+            user_step="מעריך את התקדמות המשימה",
+            status_text="מעריך התקדמות...",
+        )
         recent_results = "\n".join(
             f"- {r.get('action')} | {r.get('status')} | {self._truncate_tool_output(r.get('output', ''))[:700].replace(chr(10), ' ')}"
             for r in results[-4:]
@@ -2046,13 +2096,14 @@ class SmartiCore:
             task_state["evaluations"] = int(task_state.get("evaluations", 0) or 0) + 1
             guidance = re.sub(r'\s+', ' ', str(data.get("guidance", "") or "")).strip()[:500]
             status = str(data.get("status", "continue") or "continue").strip().lower()
+            step_done = bool(data.get("step_done"))
+            next_idx = data.get("next_step_index", None)
             if data.get("step_done") and task_state.get("plan_steps"):
                 idx = int(task_state.get("current_step_idx", 0) or 0)
                 if 0 <= idx < len(task_state["plan_steps"]):
                     step = task_state["plan_steps"][idx]
                     if step not in task_state["completed_steps"]:
                         task_state["completed_steps"].append(step)
-                next_idx = data.get("next_step_index", None)
                 if isinstance(next_idx, int) and next_idx > 0:
                     task_state["current_step_idx"] = min(next_idx - 1, max(0, len(task_state["plan_steps"]) - 1))
                 else:
@@ -2061,6 +2112,10 @@ class SmartiCore:
                 task_state.setdefault("failures", []).append(f"Evaluator: {guidance}")
                 task_state["failures"] = task_state["failures"][-8:]
             task_state["last_evaluation"] = guidance
+            self._trace_agent_phase(
+                "evaluator",
+                f"result iteration={iteration} status={status} step_done={step_done} next_step_index={next_idx} guidance={guidance[:250]}"
+            )
             if guidance:
                 return (
                     "[SMARTI_EVALUATOR_BEGIN]\n"
@@ -2071,6 +2126,7 @@ class SmartiCore:
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task evaluator skipped: {e}")
         return ""
 
@@ -2328,15 +2384,45 @@ class SmartiCore:
             candidate = re.sub(r'^(סטטוס|שלב|פעולה)\s*[:：]\s*', '', candidate, flags=re.IGNORECASE).strip()
 
         candidate = candidate.strip(" .:()[]")
+        candidate = re.sub(r'\s+', ' ', candidate).strip()
+        candidate = re.split(r'\s+(?:כדי|בשביל|לצורך|לשם|במטרה|על מנת)\b', candidate, maxsplit=1)[0].strip()
+        candidate = re.split(r'\s+(?:ואז|ולאחר מכן|ואחר כך|לאחר מכן|אחר כך)\b', candidate, maxsplit=1)[0].strip()
+        candidate = re.split(
+            r'[,;]\s*(?:ו?רשימת|ו?כתיבת|ו?סיכום|ו?שמירת|ו?יצירת|ו?בדיקת|ו?קריאת|ו?שליפת|ו?חיפוש|ו?איתור|ו?הרצת)\b',
+            candidate,
+            maxsplit=1,
+        )[0].strip()
+        candidate = re.split(
+            r'\s+ו(?:לסכם|לכתוב|לשמור|ליצור|לבנות|לתקן|לשלוח|לפתוח|להדביק|להחזיר|לאמת|להכין|לעדכן|להמשיך|להמיר|לנתח)\b',
+            candidate,
+            maxsplit=1,
+        )[0].strip()
+        candidate = re.split(
+            r'\s+ו(?:סיכום|כתיבת|שמירת|יצירת|בניית|תיקון|שליחת|פתיחת|הדבקת|החזרת|אימות|הכנת|עדכון|המרת|ניתוח)\b',
+            candidate,
+            maxsplit=1,
+        )[0].strip()
+        candidate = re.split(
+            r'\s+ל(?:וודא|וודא|ווידא|וידוא|ווידוא|וידוי|ווידוי|אמת|סכם|כתוב|שמור|יצור|צור|שלוח|פתוח|הכין|עדכן|המיר|נתח)\b',
+            candidate,
+            maxsplit=1,
+        )[0].strip()
+        candidate = re.sub(r'\bשליפת\s+(?:אימייל|מייל)\s+אחרון\b', "שליפת האימייל האחרון", candidate)
+        candidate = re.sub(r'\bקריאת\s+(?:אימייל|מייל)\s+אחרון\b', "קריאת האימייל האחרון", candidate)
+        candidate = candidate.strip(" .:()[]")
         bad_fragments = [
             "שלום", "תודה", "סליחה", "אני סמארטי", "איך אוכל לעזור",
             "כעת כשאני", "כעת כשה", "האם תרצה", "המתן", "עבורך",
             "מזג האוויר", "התוצאה היא"
         ]
-        action_step_prefixes = ("בודק", "מחפש", "מאתר", "קורא", "מריץ", "מפעיל", "שומר", "פותח", "טוען", "מתקין", "יוצר")
+        action_step_prefixes = (
+            "בודק", "מחפש", "מאתר", "קורא", "מריץ", "מפעיל", "שומר", "פותח", "טוען", "מתקין", "יוצר",
+            "מתכנן", "מעריך", "מאמת", "מעדכן", "מכין", "שולף",
+            "בדיקת", "חיפוש", "איתור", "קריאת", "שליפת", "שמירת", "יצירת", "פתיחת", "הרצת", "אימות", "תכנון", "הערכת"
+        )
         if any(fragment in candidate for fragment in bad_fragments) and not candidate.startswith(action_step_prefixes):
             return ""
-        if len(candidate) > 110:
+        if len(candidate) > 95 or len(candidate.split()) > 9:
             return ""
         return candidate
 
@@ -2368,9 +2454,94 @@ class SmartiCore:
 
         if schema_check:
             return f"בודק סכמת {package_name or tool_name or action}"
-        if action in {"system_manager", "software_manager", "file_manager", "web_manager", "screen_manager", "background_task_manager", "memory_manager", "extension_manager", "automation_manager"}:
+        if action == "system_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "git_status":
+                return "בודק מצב Git"
+            if manager_op == "list_processes":
+                return "בודק תהליכים פעילים"
+            if manager_op == "run_project_check":
+                return "מריץ בדיקת פרויקט"
+            if manager_op == "set_clipboard":
+                return "מעדכן את הלוח"
+            if manager_op == "set_volume":
+                return "מעדכן עוצמת שמע"
+            return "מריץ פקודת מערכת" if manager_op == "run_command" else "מפעיל כלי מערכת"
+        if action == "file_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "save_text":
+                return f"שומר {target}" if target else "שומר קובץ טקסט"
+            if manager_op == "read_document":
+                return f"קורא {target}" if target else "קורא קובץ"
+            if manager_op == "search_files":
+                return f"מחפש {target}" if target else "מחפש קבצים"
+            if manager_op == "search_content":
+                return "מחפש בתוך קבצים"
+            if manager_op == "extract_image_text":
+                return "מחלץ טקסט מתמונה"
+            if manager_op == "open":
+                return f"פותח {target}" if target else "פותח קובץ"
+            return "מפעיל כלי קבצים"
+        if action == "web_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "search":
+                return "מחפש מידע עדכני"
+            if manager_op == "read":
+                return f"קורא אתר {target}" if target else "קורא אתר"
+            if manager_op == "open":
+                return f"פותח {target}" if target else "פותח דפדפן"
+            if manager_op == "weather":
+                return f"שולף תחזית עבור {target}" if target else "שולף תחזית מזג אוויר"
+            return "מפעיל כלי רשת"
+        if action == "screen_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "capture":
+                return "מצלם את המסך"
+            if manager_op == "save_screenshot":
+                return "שומר צילום מסך"
+            if manager_op == "analyze_image":
+                return "מנתח תמונה"
+            return "מפעיל כלי מסך"
+        if action == "email_manager":
+            email_op = str(args.get("action") or "").strip()
+            if email_op == "list_folders":
+                return "בודק תיקיות אימייל"
+            if email_op == "search":
+                if args.get("count") == 1 and not any(args.get(k) for k in ("query", "from", "subject_filter", "to_filter")):
+                    return "שליפת האימייל האחרון"
+                return "מחפש אימיילים"
+            if email_op == "read":
+                return "קורא אימייל"
+            if email_op in {"send", "reply", "forward"}:
+                return "מכין שליחת אימייל"
+            if email_op == "draft":
+                return "שומר טיוטת אימייל"
+            if email_op in {"mark_read", "mark_unread", "star", "unstar"}:
+                return "מעדכן סימון אימייל"
+            if email_op in {"archive", "trash", "delete", "move", "copy"}:
+                return "מעדכן מיקום אימייל"
+            if email_op == "save_attachments":
+                return "שומר קבצים מצורפים"
+            return "מפעיל כלי אימייל"
+        if action == "background_task_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "schedule":
+                return "מתזמן משימה"
+            if manager_op == "list":
+                return "בודק משימות רקע"
+            if manager_op == "cancel":
+                return "מבטל משימת רקע"
+            if manager_op == "retry":
+                return "מריץ משימה מחדש"
+            return "מפעיל משימת רקע"
+        if action == "memory_manager":
+            return "מחפש בזיכרון" if str(args.get("action") or "") == "search" else "מעדכן זיכרון"
+        if action == "automation_manager":
+            target_kind = str(args.get("target") or "").strip()
+            return "מפעיל אוטומציית דפדפן" if target_kind == "browser" else "מפעיל אוטומציית מחשב"
+        if action in {"software_manager", "extension_manager"}:
             manager_op = self._short_step_value(args.get("action") or args.get("target") or "", 24)
-            return f"׳׳₪׳¢׳™׳ {self._short_step_value(action.replace('_', ' '), 30)} {manager_op}".strip()
+            return f"מפעיל {self._short_step_value(action.replace('_', ' '), 30)} {manager_op}".strip()
         if action == "get_tool_info":
             return f"בודק סכמת {tool_name or 'כלי'}"
         if action == "get_weather":
@@ -3868,7 +4039,7 @@ CWD: {current_dir}
 **פרוטוקול עבודה קצר:**
 הבן -> תכנן -> בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
 במשימות בעלות כמה שכבות פעל היררכית לפי מצב המשימה הפנימי: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
-כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON. אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
+כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON. שורת השלב מתארת רק את הכלי/הפעולה שמבוצעים עכשיו, לא את מטרת ההמשך ולא את כל התוכנית; למשל כתוב "שליפת האימייל האחרון" ולא "שליפת האימייל האחרון כדי לסכם ולכתוב לקובץ". אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
 ```json
 {{
   "method": "tools/call",
@@ -4014,11 +4185,19 @@ CWD: {current_dir}
 
     def _verify_final_response(self, objective, final_response, force=False):
         if not self.settings.get("enable_final_verifier", True) or self._is_background_context():
+            self._trace_agent_phase("verifier", "skipped reason=disabled_or_background")
             return final_response
         if not force and len(str(final_response or "").strip()) < 220 and not self._looks_like_internal_artifact(final_response):
+            self._trace_agent_phase("verifier", "skipped reason=short_low_risk_response")
             return final_response
         try:
             observations = "\n".join(self.recent_tool_observations[-8:])
+            self._emit_agent_phase(
+                "verifier",
+                f"start force={bool(force)} response_chars={len(str(final_response or ''))} observations={len(self.recent_tool_observations[-8:])}",
+                user_step="מאמת את התשובה הסופית",
+                status_text="מאמת תשובה סופית...",
+            )
             verifier_text = (
                 "אתה בודק אמינות קצר. אל תפעיל כלים ואל תוסיף מידע חדש.\n"
                 "אם התשובה מספקת ביחס למטרה ולתצפיות, ענה בדיוק: OK.\n"
@@ -4038,6 +4217,7 @@ CWD: {current_dir}
             verdict = (verdict or "").strip()
             if verdict.startswith("NEEDS_USER:"):
                 note = verdict.replace("NEEDS_USER:", "", 1).strip()
+                self._trace_agent_phase("verifier", f"result verdict=NEEDS_USER note={note[:300]}")
                 logging.info(f"Final verifier requested revision: {note}")
                 revision_text = (
                     "תקן את התשובה הסופית לפי בדיקת האמינות. אל תזכיר את בדיקת האמינות, אל תוסיף כותרת, "
@@ -4058,10 +4238,15 @@ CWD: {current_dir}
                 self._log_usage(current_model, usage_dict)
                 revised = (revised or "").strip()
                 if revised and not revised.startswith("NEEDS_USER:") and "בדיקת אמינות" not in revised and not self._looks_like_internal_artifact(revised):
+                    self._trace_agent_phase("verifier", f"revision_applied chars={len(revised)}")
                     return self._strip_internal_artifacts(revised)
+                self._trace_agent_phase("verifier", "revision_rejected using_original")
+            else:
+                self._trace_agent_phase("verifier", f"result verdict={verdict[:120] or 'EMPTY'}")
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
+            self._trace_agent_phase("verifier", f"skipped error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Final verifier skipped: {e}")
         return final_response
 
@@ -4305,7 +4490,8 @@ CWD: {current_dir}
             if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
                 final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
-            if self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration) and not run_cancel_event.is_set():
+            should_verify_final = self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
+            if should_verify_final and not run_cancel_event.is_set():
                 try:
                     final_response = self._verify_final_response(user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
                 except SmartiCancelled:
@@ -4314,6 +4500,8 @@ CWD: {current_dir}
                 final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
                 if not final_response or self._looks_like_internal_artifact(final_response):
                     final_response = self._fallback_final_response(user_text)
+            elif not should_verify_final:
+                self._trace_agent_phase("verifier", "skipped reason=not_needed_for_final_response")
 
             if final_response and not final_response.startswith("ERROR_USER") and not run_cancel_event.is_set():
                 try:
