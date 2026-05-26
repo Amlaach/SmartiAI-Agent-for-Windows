@@ -223,6 +223,19 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["tool_name"]
         }
     },
+    "agent_planner": {
+        "description": "כלי פנימי לבקשת תכנון משימה. השתמש בו רק כאשר המשימה מצדיקה תכנון מפורש לפני כלים או תשובה; אל תשתמש בו לברכה, שיחה פשוטה, או פעולה חד-שלבית ברורה.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "סיבה קצרה למה המשימה מצדיקה תכנון."},
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "תוכנית קצרה של 3-7 שלבים אם כבר ברור לך איך לתכנן."},
+                "risk": {"type": "string", "enum": ["low", "medium", "high"], "description": "רמת סיכון משוערת."},
+                "mode": {"type": "string", "enum": ["auto", "use_provided_steps", "ask_planner"], "description": "auto ברירת מחדל; use_provided_steps אם סיפקת צעדים טובים; ask_planner אם צריך Planner פנימי נוסף."}
+            },
+            "required": ["reason"]
+        }
+    },
     "email_manager": {
         "description": "Full IMAP/SMTP email tool: list folders, search, read, send, draft, reply, forward, mark, star, archive, move, copy, trash, delete, manage folders, and save attachments.",
         "inputSchema": {
@@ -734,6 +747,7 @@ TOOL_CATEGORY_LABELS = {
 }
 
 TOOL_CATEGORIES = {
+    "agent_planner": "schema",
     "get_tool_info": "schema",
     "system_manager": "system",
     "software_manager": "software",
@@ -793,8 +807,6 @@ DEFAULT_SETTINGS = {
     "enable_computer_control": False,
     "max_agent_loops": 15,
     "enable_hierarchical_agent": True,
-    "agent_planner_min_score": 2,
-    "agent_model_planner_min_score": 4,
     "max_agent_evaluations_per_task": 4,
     "agent_context_compact_after_loops": 4,
     "agent_inline_history_message_limit": 24,

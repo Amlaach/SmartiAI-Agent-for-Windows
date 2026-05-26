@@ -787,7 +787,7 @@ class SmartiCore:
             "SKILL_REQUIREMENTS_MISSING:", "tools/call", "הנחיית מערכת:",
             "UNTRUSTED_TOOL_OUTPUT", "UNTRUSTED_TOOL_ERROR",
             "[SMARTI_TASK_STATE", "[SMARTI_PROGRESS", "[SMARTI_EVALUATOR",
-            "[SMARTI_PARALLEL_TOOL_RESULTS", "SMARTI_TOOL_OUTPUT_COMPACTED"
+            "[SMARTI_PLANNER", "[SMARTI_PARALLEL_TOOL_RESULTS", "SMARTI_TOOL_OUTPUT_COMPACTED"
         ]
         return any(marker in text for marker in markers)
 
@@ -795,7 +795,7 @@ class SmartiCore:
         text = (text or "").strip()
         text = re.sub(r'\[UNTRUSTED_[A-Z_]+_BEGIN[^\]]*\].*?\[UNTRUSTED_[A-Z_]+_END[^\]]*\]', '', text, flags=re.DOTALL)
         text = re.sub(r'\[SKILL_OBSERVATION_BEGIN[^\]]*\].*?\[SKILL_OBSERVATION_END[^\]]*\]', '', text, flags=re.DOTALL)
-        for marker in ("TASK_STATE", "PROGRESS", "EVALUATOR", "PARALLEL_TOOL_RESULTS"):
+        for marker in ("TASK_STATE", "PROGRESS", "EVALUATOR", "PLANNER", "PARALLEL_TOOL_RESULTS"):
             text = re.sub(rf'\[SMARTI_{marker}_BEGIN[^\]]*\].*?\[SMARTI_{marker}_END[^\]]*\]', '', text, flags=re.DOTALL)
         text = re.sub(r'```json\s*\{.*?"tools/call".*?\}\s*```', '', text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', text, flags=re.DOTALL).strip()
@@ -1629,25 +1629,6 @@ class SmartiCore:
             score += 1
         return score
 
-    def _should_use_task_planner(self, user_text, is_background_task=False):
-        if not self.settings.get("enable_hierarchical_agent", True):
-            return False
-        text = (user_text or "").strip()
-        if not text:
-            return False
-        direct_chat = len(text) < 90 and not any(token in text.lower() for token in [
-            "פתח", "חפש", "בדוק", "צור", "כתוב", "שמור", "שלח", "התקן", "תקן",
-            "קובץ", "אתר", "מייל", "מסך", "תוכנה", "אפליקציה", "weather", "search",
-            "open", "file", "email", "install", "fix"
-        ])
-        if direct_chat:
-            return False
-        try:
-            threshold = int(self.settings.get("agent_planner_min_score", 2) or 2)
-        except Exception:
-            threshold = 2
-        return self._estimate_agent_task_complexity(text) >= max(1, threshold)
-
     def _fallback_task_plan(self, objective):
         text = (objective or "").lower()
         steps = ["להבין את המטרה והאילוצים"]
@@ -1713,42 +1694,17 @@ class SmartiCore:
             logging.warning(f"Task planner skipped: {e}")
         return self._fallback_task_plan(objective), "medium", "", False
 
-    def _initialize_task_state(self, objective, current_model, is_background_task=False):
-        score = self._estimate_agent_task_complexity(objective)
-        planner_enabled = self._should_use_task_planner(objective, is_background_task=is_background_task)
-        steps = self._fallback_task_plan(objective) if planner_enabled else []
-        risk = "medium" if planner_enabled else "low"
-        notes = ""
-        used_model_planner = False
-        try:
-            model_threshold = int(self.settings.get("agent_model_planner_min_score", 4) or 4)
-        except Exception:
-            model_threshold = 4
-        if planner_enabled:
-            self._emit_agent_phase(
-                "planner",
-                f"start score={score} model_threshold={model_threshold} background={bool(is_background_task)}",
-                user_step="מתכנן את שלבי המשימה",
-                status_text="מתכנן שלבי ביצוע...",
-                show_step=not is_background_task,
-            )
-        else:
-            self._trace_agent_phase("planner", f"skipped score={score} enabled=false_or_below_threshold")
-        if planner_enabled and not is_background_task and score >= max(2, model_threshold):
-            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model)
-        if planner_enabled:
-            self._trace_agent_phase(
-                "planner",
-                f"complete source={'model' if used_model_planner else 'local'} steps={len(steps)} risk={risk}"
-            )
+    def _base_task_state(self, objective, planner_enabled=False):
         return {
             "objective": objective,
-            "complexity_score": score,
-            "planner_enabled": planner_enabled,
-            "used_model_planner": used_model_planner,
-            "risk": risk,
-            "planner_notes": notes,
-            "plan_steps": steps,
+            "complexity_score": self._estimate_agent_task_complexity(objective),
+            "planner_enabled": bool(planner_enabled),
+            "used_model_planner": False,
+            "planner_source": "none",
+            "planner_request_reason": "",
+            "risk": "medium" if planner_enabled else "low",
+            "planner_notes": "",
+            "plan_steps": [],
             "current_step_idx": 0,
             "completed_steps": [],
             "observations": [],
@@ -1757,6 +1713,79 @@ class SmartiCore:
             "last_evaluation": "",
             "compactions": 0,
         }
+
+    def _initialize_direct_task_state(self, objective):
+        state = self._base_task_state(objective, planner_enabled=False)
+        self._trace_agent_phase(
+            "planner",
+            f"available_for_model_decision score={state.get('complexity_score', 0)} auto_start=false"
+        )
+        return state
+
+    def _activate_model_requested_planner(self, task_state, planner_args, current_model, is_background_task=False):
+        task_state = task_state or self._base_task_state("", planner_enabled=False)
+        if not self.settings.get("enable_hierarchical_agent", True):
+            self._trace_agent_phase("planner", "model_request_ignored reason=disabled")
+            return task_state, "Planner disabled by settings. Continue without a hierarchical plan."
+        if task_state.get("planner_enabled"):
+            self._trace_agent_phase("planner", "model_request_ignored reason=already_active")
+            return task_state, "Planner already active."
+
+        args = planner_args if isinstance(planner_args, dict) else {}
+        objective = task_state.get("objective", "")
+        reason = re.sub(r'\s+', ' ', str(args.get("reason", "") or "")).strip()[:500]
+        mode = str(args.get("mode", "auto") or "auto").strip().lower()
+        risk = str(args.get("risk", "medium") or "medium").strip().lower()
+        if risk not in {"low", "medium", "high"}:
+            risk = "medium"
+        provided_steps = [
+            re.sub(r'\s+', ' ', str(step)).strip()
+            for step in (args.get("steps") or [])
+            if str(step).strip()
+        ]
+
+        self._emit_agent_phase(
+            "planner",
+            f"requested_by_model score={task_state.get('complexity_score', 0)} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
+            user_step="מתכנן את שלבי המשימה",
+            status_text="מתכנן שלבי ביצוע...",
+            show_step=not is_background_task,
+        )
+
+        notes = reason
+        used_model_planner = False
+        source = "controller"
+        if provided_steps and mode != "ask_planner":
+            steps = provided_steps[:7]
+        elif not is_background_task:
+            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model)
+            source = "model"
+        else:
+            steps = self._fallback_task_plan(objective)
+            source = "local"
+
+        if not steps:
+            steps = self._fallback_task_plan(objective)
+            source = "local"
+
+        task_state.update({
+            "planner_enabled": True,
+            "used_model_planner": bool(used_model_planner),
+            "planner_source": source,
+            "planner_request_reason": reason,
+            "risk": risk,
+            "planner_notes": notes,
+            "plan_steps": steps[:7],
+            "current_step_idx": 0,
+            "completed_steps": [],
+            "evaluations": 0,
+            "last_evaluation": "",
+        })
+        self._trace_agent_phase(
+            "planner",
+            f"complete source={source} steps={len(task_state.get('plan_steps', []))} risk={risk}"
+        )
+        return task_state, "Planner activated."
 
     def _task_state_summary(self, task_state, include_guidance=True):
         if not task_state or not task_state.get("planner_enabled"):
@@ -1777,13 +1806,28 @@ class SmartiCore:
         return (
             "[SMARTI_TASK_STATE_BEGIN]\n"
             f"Objective: {task_state.get('objective', '')[:900]}\n"
-            f"Mode: {'hierarchical' if task_state.get('planner_enabled') else 'direct'} | Risk: {task_state.get('risk', 'medium')} | Planner: {'model' if task_state.get('used_model_planner') else 'local'}\n"
+            f"Mode: {'hierarchical' if task_state.get('planner_enabled') else 'direct'} | Risk: {task_state.get('risk', 'medium')} | Planner: {task_state.get('planner_source') or ('model' if task_state.get('used_model_planner') else 'local')}\n"
             f"Plan:\n" + ("\n".join(plan_lines) if plan_lines else "אין תוכנית נפרדת.") + "\n"
             f"Recent observations:\n{recent_obs}\n"
             f"Recent failures:\n{failures}"
             f"{guidance}\n"
             "[SMARTI_TASK_STATE_END]"
         )
+
+    def _append_internal_planner_feedback(self, current_messages, tool_turn_text, task_state, planner_feedback):
+        payload = (
+            "[SMARTI_PLANNER_BEGIN]\n"
+            f"{planner_feedback}\n"
+            "המשך כעת לפי מצב המשימה. אל תציג את מצב המשימה או את הודעת ה-Planner למשתמש.\n"
+            "[SMARTI_PLANNER_END]\n\n"
+            f"{self._task_state_summary(task_state, include_guidance=True)}"
+        )
+        if self.mode == "gemini":
+            current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
+            current_messages.append({"role": "user", "parts": [{"text": payload}]})
+        else:
+            current_messages.append({"role": "assistant", "content": tool_turn_text})
+            current_messages.append({"role": "user", "content": payload})
 
     def _append_task_state_message(self, current_messages, task_state, include_guidance=True):
         summary = self._task_state_summary(task_state, include_guidance=include_guidance)
@@ -2539,6 +2583,8 @@ class SmartiCore:
         if action == "automation_manager":
             target_kind = str(args.get("target") or "").strip()
             return "מפעיל אוטומציית דפדפן" if target_kind == "browser" else "מפעיל אוטומציית מחשב"
+        if action == "agent_planner":
+            return "מתכנן את שלבי המשימה"
         if action in {"software_manager", "extension_manager"}:
             manager_op = self._short_step_value(args.get("action") or args.get("target") or "", 24)
             return f"מפעיל {self._short_step_value(action.replace('_', ' '), 30)} {manager_op}".strip()
@@ -3943,6 +3989,7 @@ class SmartiCore:
         active_tools = []
         
         inline_schema_tools = {
+            "agent_planner",
             "get_tool_info",
             "system_manager",
             "software_manager",
@@ -3954,6 +4001,12 @@ class SmartiCore:
             "automation_manager",
             "extension_manager",
         }
+
+        if self.settings.get("enable_hierarchical_agent", True):
+            planner_schema = json.dumps(BUILTIN_TOOL_SCHEMAS["agent_planner"]["inputSchema"], ensure_ascii=False)
+            active_tools.append(
+                f"- `agent_planner`: {BUILTIN_TOOL_SCHEMAS['agent_planner']['description']} | Schema: {planner_schema}"
+            )
 
         # 1. Built-in tools: keep the prompt compact; schemas are available on demand.
         for name in PUBLIC_BUILTIN_TOOLS:
@@ -4037,8 +4090,9 @@ CWD: {current_dir}
 {background_note}
 
 **פרוטוקול עבודה קצר:**
-הבן -> תכנן -> בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
-במשימות בעלות כמה שכבות פעל היררכית לפי מצב המשימה הפנימי: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
+הבן -> החלט אם צריך תכנון -> ענה ישירות או בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
+בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת.
+כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
 כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON. שורת השלב מתארת רק את הכלי/הפעולה שמבוצעים עכשיו, לא את מטרת ההמשך ולא את כל התוכנית; למשל כתוב "שליפת האימייל האחרון" ולא "שליפת האימייל האחרון כדי לסכם ולכתוב לקובץ". אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
 ```json
 {{
@@ -4291,7 +4345,7 @@ CWD: {current_dir}
             if getattr(self, "agent_runtime", None):
                 self.agent_runtime.trace("plan", user_text[:1000])
 
-            task_state = self._initialize_task_state(user_text, current_model, is_background_task=is_background_task)
+            task_state = self._initialize_direct_task_state(user_text)
 
             if self.mode == "gemini":
                 current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
@@ -4300,7 +4354,6 @@ CWD: {current_dir}
                 history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
                 current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
                 current_messages.append({"role": "user", "content": user_text})
-            self._append_task_state_message(current_messages, task_state, include_guidance=True)
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
                 if run_cancel_event.is_set():
@@ -4355,6 +4408,28 @@ CWD: {current_dir}
                     if feedback_for_ai or not first_call:
                         logging.warning(feedback_for_ai)
                         self._append_tool_feedback(current_messages, tool_turn_text, "tool_parser", feedback_for_ai or "ERROR: Invalid tool call.")
+                        continue
+
+                    if first_call.get("action") == "agent_planner":
+                        if getattr(self, "agent_runtime", None):
+                            self.agent_runtime.trace(
+                                "select_tool",
+                                f"agent_planner {json.dumps(first_call.get('arguments', {}), ensure_ascii=False)[:1200]}"
+                            )
+                        task_state, planner_feedback = self._activate_model_requested_planner(
+                            task_state,
+                            first_call.get("arguments", {}) or {},
+                            current_model,
+                            is_background_task=is_background_task,
+                        )
+                        self._append_internal_planner_feedback(current_messages, tool_turn_text, task_state, planner_feedback)
+                        if len(raw_tool_calls) > 1:
+                            self._append_user_feedback_message(
+                                current_messages,
+                                "הנחיית מערכת: `agent_planner` הופעל. קריאות כלי נוספות מאותה תגובה לא בוצעו. "
+                                "בחר עכשיו את הפעולה הבאה לפי התוכנית."
+                            )
+                        self._compact_current_messages_if_needed(current_messages, task_state, iteration)
                         continue
 
                     selected_calls = [first_call]
