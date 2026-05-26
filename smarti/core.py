@@ -1661,13 +1661,19 @@ class SmartiCore:
                 return text[idx:idx + end].strip()
         return ""
 
-    def _model_task_plan(self, objective, current_model):
+    def _model_task_plan(self, objective, current_model, context=""):
+        context_block = f"\n\nמידע קיים לתכנון מחדש/המשך:\n{context[:2200]}" if str(context or "").strip() else ""
         planner_prompt = (
             "אתה Planner פנימי של סמארטי. אל תפעיל כלים ואל תענה למשתמש.\n"
             "צור תוכנית קצרה, מעשית ובטיחותית למשימה. החזר JSON בלבד במבנה:\n"
             "{\"steps\":[\"...\"],\"risk\":\"low|medium|high\",\"notes\":\"...\"}\n"
-            "3-7 שלבים, בלי פירוט יתר ובלי לחשוף מחשבות פנימיות.\n\n"
+            "3-7 שלבים, בלי פירוט יתר ובלי לחשוף מחשבות פנימיות.\n"
+            "אם מדובר בתכנון מחדש/המשך, התבסס על המידע הקיים ושנה אסטרטגיה במקום לחזור מכנית על אותה דרך.\n"
+            "אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, "
+            "אל תנחש: התחל בשלב discovery קצר ללמידת הסביבה, כגון בדיקת סכמה, חיפוש/קריאת קובץ, git status, בדיקת מסך/חלון, "
+            "בדיקת תהליכים או איסוף מצב רלוונטי. רק אחר כך תכנן פעולה משנה.\n\n"
             f"משימה:\n{objective}"
+            f"{context_block}"
         )
         if self.mode == "gemini":
             messages = [{"role": "user", "parts": [{"text": planner_prompt}]}]
@@ -1705,6 +1711,7 @@ class SmartiCore:
             "risk": "medium" if planner_enabled else "low",
             "planner_notes": "",
             "plan_steps": [],
+            "planner_revisions": 0,
             "current_step_idx": 0,
             "completed_steps": [],
             "observations": [],
@@ -1722,22 +1729,40 @@ class SmartiCore:
         )
         return state
 
+    def _planner_context_for_replan(self, task_state, reason=""):
+        if not task_state:
+            return ""
+        current_plan = "\n".join(
+            f"{idx}. {step}"
+            for idx, step in enumerate((task_state.get("plan_steps") or [])[:7], start=1)
+        ) or "אין תוכנית קודמת."
+        recent_obs = "\n".join(task_state.get("observations", [])[-8:]) or "אין תצפיות."
+        failures = "\n".join(task_state.get("failures", [])[-6:]) or "אין כשלים."
+        return (
+            f"סיבת התכנון/תכנון מחדש: {reason or 'לא צוינה'}\n"
+            f"תוכנית קודמת:\n{current_plan}\n"
+            f"תצפיות אחרונות:\n{recent_obs}\n"
+            f"כשלים/אזהרות:\n{failures}\n"
+            f"הערכת Evaluator אחרונה: {task_state.get('last_evaluation', '') or 'אין'}"
+        )
+
     def _activate_model_requested_planner(self, task_state, planner_args, current_model, is_background_task=False):
         task_state = task_state or self._base_task_state("", planner_enabled=False)
         if not self.settings.get("enable_hierarchical_agent", True):
             self._trace_agent_phase("planner", "model_request_ignored reason=disabled")
             return task_state, "Planner disabled by settings. Continue without a hierarchical plan."
-        if task_state.get("planner_enabled"):
-            self._trace_agent_phase("planner", "model_request_ignored reason=already_active")
-            return task_state, "Planner already active."
 
         args = planner_args if isinstance(planner_args, dict) else {}
         objective = task_state.get("objective", "")
         reason = re.sub(r'\s+', ' ', str(args.get("reason", "") or "")).strip()[:500]
+        intent = str(args.get("intent", "") or "").strip().lower()
         mode = str(args.get("mode", "auto") or "auto").strip().lower()
         risk = str(args.get("risk", "medium") or "medium").strip().lower()
         if risk not in {"low", "medium", "high"}:
             risk = "medium"
+        replanning = bool(task_state.get("planner_enabled"))
+        if intent not in {"initial_plan", "continue_plan", "replan"}:
+            intent = "replan" if replanning else "initial_plan"
         provided_steps = [
             re.sub(r'\s+', ' ', str(step)).strip()
             for step in (args.get("steps") or [])
@@ -1746,27 +1771,28 @@ class SmartiCore:
 
         self._emit_agent_phase(
             "planner",
-            f"requested_by_model score={task_state.get('complexity_score', 0)} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
-            user_step="מתכנן את שלבי המשימה",
-            status_text="מתכנן שלבי ביצוע...",
+            f"requested_by_model intent={intent} score={task_state.get('complexity_score', 0)} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
+            user_step="מעדכן את תוכנית המשימה" if replanning else "מתכנן את שלבי המשימה",
+            status_text="מעדכן תוכנית..." if replanning else "מתכנן שלבי ביצוע...",
             show_step=not is_background_task,
         )
 
         notes = reason
         used_model_planner = False
-        source = "controller"
+        source = "replan_controller" if replanning else "controller"
         if provided_steps and mode != "ask_planner":
             steps = provided_steps[:7]
         elif not is_background_task:
-            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model)
-            source = "model"
+            replan_context = self._planner_context_for_replan(task_state, reason=reason) if replanning else ""
+            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model, context=replan_context)
+            source = "replan_model" if replanning else "model"
         else:
             steps = self._fallback_task_plan(objective)
-            source = "local"
+            source = "replan_local" if replanning else "local"
 
         if not steps:
             steps = self._fallback_task_plan(objective)
-            source = "local"
+            source = "replan_local" if replanning else "local"
 
         task_state.update({
             "planner_enabled": True,
@@ -1776,6 +1802,7 @@ class SmartiCore:
             "risk": risk,
             "planner_notes": notes,
             "plan_steps": steps[:7],
+            "planner_revisions": int(task_state.get("planner_revisions", 0) or 0) + (1 if replanning else 0),
             "current_step_idx": 0,
             "completed_steps": [],
             "evaluations": 0,
@@ -1783,9 +1810,9 @@ class SmartiCore:
         })
         self._trace_agent_phase(
             "planner",
-            f"complete source={source} steps={len(task_state.get('plan_steps', []))} risk={risk}"
+            f"complete intent={intent} source={source} steps={len(task_state.get('plan_steps', []))} risk={risk} revisions={task_state.get('planner_revisions', 0)}"
         )
-        return task_state, "Planner activated."
+        return task_state, "Planner updated." if replanning else "Planner activated."
 
     def _task_state_summary(self, task_state, include_guidance=True):
         if not task_state or not task_state.get("planner_enabled"):
@@ -4091,7 +4118,8 @@ CWD: {current_dir}
 
 **פרוטוקול עבודה קצר:**
 הבן -> החלט אם צריך תכנון -> ענה ישירות או בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
-בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת.
+בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, מותר ואף רצוי לבצע קודם discovery קצר בכלי קריאה-בלבד, ורק אחר כך לקרוא ל-`agent_planner`; לחלופין כלול בתכנון שלב discovery ראשון. אל תנחש.
+אם במהלך העבודה מתקבלים מידע חדש, שגיאות חוזרות, כשל אימות, שינויי סביבה, או תוצאות discovery שמראות שהתוכנית לא מתאימה, מותר לקרוא שוב ל-`agent_planner` עם `intent` של `replan` או `continue_plan`. זו החלטת המודל, לא טריגר אוטומטי של הקוד.
 כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
 כשצריך כלי, חובה לכתוב קודם שורת שלב מקצועית, ספציפית וקצרה עד 7 מילים שמסבירה את הפעולה הנוכחית, ואז בלוק JSON. שורת השלב מתארת רק את הכלי/הפעולה שמבוצעים עכשיו, לא את מטרת ההמשך ולא את כל התוכנית; למשל כתוב "שליפת האימייל האחרון" ולא "שליפת האימייל האחרון כדי לסכם ולכתוב לקובץ". אין לדלג על שורת השלב, ואין להשתמש בשלב פתיחה גנרי או חסר תוכן. בלי ברכות, בלי "סטטוס:", בלי התנצלות ובלי טקסט אחרי הבלוק:
 ```json
