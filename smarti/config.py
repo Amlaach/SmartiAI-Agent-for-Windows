@@ -883,6 +883,7 @@ DEFAULT_SETTINGS = {
     "tool_timeout_seconds": 120,
     "mcp_timeout_seconds": 60,
     "max_tool_output_chars": 100000,
+    "write_outside_allowed_dirs_requires_approval": True,
     "sandbox_enabled": False,
     "sandbox_root_dir": OUTPUTS_DIR,
     "sandbox_allow_read_outside": False,

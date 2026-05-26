@@ -614,6 +614,20 @@ class SmartiCore:
             if self._path_in_roots(target_path, allowed_roots):
                 return True, None
             return False, "ERROR: ארגז חול פעיל. כתיבה מחוץ לתיקיית ארגז החול חסומה."
+        allowed_roots = [
+            self._abs_path(path)
+            for path in (self.settings.get("allowed_write_dirs") or [])
+            if str(path or "").strip()
+        ]
+        if allowed_roots and not self._path_in_roots(target_path, allowed_roots):
+            if self.settings.get("write_outside_allowed_dirs_requires_approval", True) and self._policy_decision("file_write") == "allow":
+                details = (
+                    "הכתיבה היא מחוץ לתיקיות הכתיבה המועדפות של סמארטי.\n\n"
+                    f"נתיב יעד:\n{target_path}\n\n"
+                    f"תיקיות מועדפות:\n" + "\n".join(f"- {root}" for root in allowed_roots[:8])
+                )
+                if not self._request_user_approval("אישור כתיבה מחוץ לתיקיות המועדפות", details, risk="high"):
+                    return False, "ERROR: User denied writing outside allowed write directories."
         return True, None
 
     def _ensure_cloud_upload_allowed(self, source_label):
@@ -2004,9 +2018,21 @@ class SmartiCore:
             "set_volume", "update_memory"
         }
 
+    def _project_check_command_allowed(self, command):
+        cmd = str(command or "").strip()
+        if re.search(r'(&&|\|\||\||;|`|\$\(|>|>>)', cmd):
+            return False
+        allowed = [
+            r"^pytest(\s|$)", r"^python(?:\.exe)?\s+-m\s+pytest(\s|$)",
+            r"^npm\s+test(\s|$)", r"^npm\s+run\s+(?:test|build|lint)(\s|$)",
+            r"^pnpm\s+(?:test|build|lint)(\s|$)", r"^yarn\s+(?:test|build|lint)(\s|$)"
+        ]
+        return any(re.match(pattern, cmd, flags=re.IGNORECASE) for pattern in allowed)
+
     def _execute_prepared_tool_call(self, call, schemas_seen):
         action = call.get("action", "")
         args_dict = call.get("arguments", {}) or {}
+        effective_action, _ = self._effective_tool_action(action, args_dict)
         try:
             self._raise_if_cancelled()
             feedback_for_ai, message_for_user = self.execute_tool(action, args_dict)
@@ -2028,6 +2054,7 @@ class SmartiCore:
             self._record_tool_observation(action, args_dict, status, obs)
         return {
             "action": action,
+            "effective_action": effective_action,
             "arguments": args_dict,
             "feedback": feedback_for_ai,
             "message": message_for_user,
@@ -2064,6 +2091,7 @@ class SmartiCore:
                     action = call.get("action", "")
                     results.append({
                         "action": action,
+                        "effective_action": self._effective_tool_action(action, call.get("arguments", {}) or {})[0],
                         "arguments": call.get("arguments", {}) or {},
                         "feedback": f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}",
                         "message": None,
@@ -2103,10 +2131,13 @@ class SmartiCore:
             return
         for item in results:
             action = item.get("action", "")
+            effective = item.get("effective_action", action)
             status = item.get("status", "")
             step = item.get("step_text", "")
             preview = self._truncate_tool_output(item.get("output", ""))[:500].replace("\n", " ")
             line = f"- {action} | {status}"
+            if effective and effective != action:
+                line += f" | effective={effective}"
             if step:
                 line += f" | step={step}"
             if preview:
@@ -2312,7 +2343,10 @@ class SmartiCore:
         return target
 
     def _subprocess_env(self, env=None):
-        return self._sync_ssl_compat_env(os.environ.copy() if env is None else env)
+        target = os.environ.copy() if env is None else dict(env)
+        target.setdefault("PYTHONIOENCODING", "utf-8")
+        target.setdefault("PYTHONUTF8", "1")
+        return self._sync_ssl_compat_env(target)
 
     def _ssl_request_kwargs(self):
         self._sync_ssl_compat_env()
@@ -2358,6 +2392,8 @@ class SmartiCore:
         if self._sandbox_enabled():
             env["SMARTI_SANDBOX_ROOT"] = self._sandbox_root()
             env["SMARTI_SANDBOX_READ_OUTSIDE"] = "1" if self.settings.get("sandbox_allow_read_outside", False) else "0"
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
         return self._sync_ssl_compat_env(env)
 
     def _mcp_launch_args(self, pkg_name):
@@ -4134,9 +4170,10 @@ CWD: {current_dir}
 1. אם השאלה היא שיחה כללית או "מה היכולות שלך", ענה ישירות לפי רשימת הכלים וה-Skills שבהנחיה; אל תפעיל כלי רק כדי לענות.
 2. {schema_lookup_rule}
 2א. {skills_availability_rule}
-3. סדר בחירה: תשובה ישירה כשאין צורך בפעולה -> כלי מובנה בטוח -> Skill כאשר הוא מתאר תהליך מתאים -> כלי Python קיים -> MCP קיים -> חיפוש/התקנת Skill או MCP רק כשאין יכולת קיימת מתאימה -> יצירת כלי Python רק ליכולת כללית שחוזרת על עצמה.
-3א. נאמנות לדרך שביקש המשתמש: אם המשתמש ביקש במפורש לבצע פעולה באפליקציה, בתוך חלון, באמצעות כלי מסוים, או השתמש במילים כמו "דווקא", "בתוך", "באמצעות" או "פתח", זו דרישת ביצוע ולא רק רמז. נסה קודם את הדרך המבוקשת. אם היא נכשלת, בצע אבחון וניסיון בטוח נוסף בדרך קרובה לפני מעבר לחלופה. מעבר לחלופה מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז אמור זאת למשתמש בקצרה ואל תטען שבוצעה הדרך המקורית.
-4. הורדת כלי חדש: חפש Skill ב-ClawHub עבור תהליך עבודה/מומחיות; חפש MCP עבור API/שירות חיצוני; צור כלי Python רק אם צריך לוגיקה מקומית כללית ומוגדרת.
+3. בחירת כלי היא שיקול דעת שלך: העדף תשובה ישירה כשאין צורך בפעולה; אחרת העדף כלי מובנה/manager מתאים; השתמש ב-Skill כשיש מתודולוגיה רב-שלבית מתאימה; השתמש בכלי Python קיים רק כשנדרש עיבוד מקומי ייעודי; השתמש ב-MCP קיים כשנדרש API/שירות חיצוני; חיפוש/התקנת Skill או MCP רק כשאין יכולת קיימת מתאימה; יצירת כלי Python רק ליכולת מקומית כללית, פרמטרית ורב-פעמית. מותר לחרוג כאשר פרטי המשימה או בקשת המשתמש מצדיקים זאת.
+3א. לפני shell חופשי שאל את עצמך אם יש כלי מובנה טוב יותר: `run_project_check` לבדיקות/build מוכרות, `git_status` ל-git קריאה בלבד, `file_manager` לשמירה/פתיחה/חיפוש, `software_manager` לפתיחת אפליקציות, `web_manager` לרשת ומזג אוויר. אם בחרת shell בכל זאת, ודא שזה בגלל צורך אמיתי ולא קיצור דרך.
+3ב. נאמנות לדרך שביקש המשתמש: אם המשתמש ביקש במפורש לבצע פעולה באפליקציה, בתוך חלון, באמצעות כלי מסוים, או השתמש במילים כמו "דווקא", "בתוך", "באמצעות" או "פתח", זו דרישת ביצוע ולא רק רמז. נסה קודם את הדרך המבוקשת. אם היא נכשלת, בצע אבחון וניסיון בטוח נוסף בדרך קרובה לפני מעבר לחלופה. מעבר לחלופה מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז אמור זאת למשתמש בקצרה ואל תטען שבוצעה הדרך המקורית.
+4. הורדת כלי חדש: לפני התקנת MCP חפש ובדוק חבילה, מפרסם, תיאור וגרסה נעולה; לפני התקנת Skill חפש ובדוק התאמה. אם המשתמש נתן מזהה מדויק וביקש התקנה ישירה, עדיין שקול בקצרה אם חיפוש מקדים נחוץ לבטיחות. צור כלי Python חדש רק עם JSON Schema מלא וקלט דרך sys.argv[1], ללא קוד קשיח למקרה חד-פעמי אלא אם המשתמש ביקש זאת במפורש.
 5. למזג אוויר ותחזית השתמש קודם ב-`get_weather` עם שם מיקום כללי ואל תמציא נתונים. Skill בשם weather הוא מדריך בלבד אלא אם הוא הותקן עם handler מפורש.
 5א. אם המשתמש ביקש במפורש MCP/שרת חיצוני עבור מזג אוויר, העדף MCP מותקן ומאושר על פני `get_weather`. אם MCP נכשל או חסום, אמור זאת ואל תטען שהשתמשת בו.
 5ב. לפרשת השבוע, לוח שנה, תאריך עברי או מידע דתי-זמני השתמש בכלי מאומת כאשר הוא זמין, ובמיוחד `sefaria-mcp-server` אם הוא מופיע ברשימת MCP. אל תחשב מהזיכרון.
@@ -5994,6 +6031,10 @@ else:
                 return (self.run_system_command([cmd], cwd=args_dict.get("cwd", ""), timeout_seconds=args_dict.get("timeout_seconds", None)), None)
                 
             elif action == "create_python_tool":
+                try:
+                    json.loads(str(args_dict.get("description", "")).strip())
+                except Exception as e:
+                    return (f"ERROR: Tool description must be valid JSON Schema. {e}", None)
                 allowed, err = self._ensure_capability_allowed("python_tool_create", "אישור יצירת כלי פייתון", f"שם: {args_dict.get('name', '')}\n\n{args_dict.get('description', '')}", risk="high")
                 if not allowed: return (err, None)
                 return (self.manage_python_tools(["save", str(args_dict.get("name", "")), args_dict.get("require_approval", False), str(args_dict.get("description", "")), str(args_dict.get("code", ""))]), None)
@@ -6534,12 +6575,7 @@ else:
         if not sandbox_ok: return sandbox_err
         if not os.path.isdir(root): return f"ERROR: Not a folder: {root}"
         cmd = str(command or "").strip()
-        allowed = [
-            r"^pytest(\s|$)", r"^python(?:\.exe)?\s+-m\s+pytest(\s|$)",
-            r"^npm\s+test(\s|$)", r"^npm\s+run\s+(?:test|build|lint)(\s|$)",
-            r"^pnpm\s+(?:test|build|lint)(\s|$)", r"^yarn\s+(?:test|build|lint)(\s|$)"
-        ]
-        if not any(re.match(pattern, cmd, flags=re.IGNORECASE) for pattern in allowed):
+        if not self._project_check_command_allowed(cmd):
             return "ERROR: run_project_check מאפשר רק פקודות בדיקה/build מוכרות. השתמש ב-system_command עם אישור מפורש לפקודה אחרת."
         return self.run_system_command([cmd], cwd=root)
 
