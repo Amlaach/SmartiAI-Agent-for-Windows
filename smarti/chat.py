@@ -207,7 +207,10 @@ class MessageBubble(QFrame):
         self.toggle_btn.setText("▼ שלבי פעולה")
 
     def start_steps_shimmer(self):
-        self.steps_label.start_shimmer()
+        # Agent-step shimmer is disabled by default.
+        # Re-enable it by uncommenting the next line.
+        # self.steps_label.start_shimmer()
+        pass
 
     def stop_steps_shimmer(self):
         self.steps_label.stop_shimmer()
