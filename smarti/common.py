@@ -99,21 +99,59 @@ SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None an
 TTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-logging.basicConfig(filename=os.path.join(APP_DIR, 'smarti_agent.log'), level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 
-SETTINGS_FILE = os.path.join(APP_DIR, "smarti_settings.json")
-USAGE_FILE = os.path.join(APP_DIR, "smarti_usage.json")
-MEMORY_FILE = os.path.join(APP_DIR, "smarti_memory.json")
-MEMORY_EXPORT_FILE = os.path.join(APP_DIR, "smarti_memory.md")
-TOOLS_DIR = os.path.join(APP_DIR, "custom_tools")
-MCP_TOOLS_DIR = os.path.join(APP_DIR, "mcp_tools")
-SKILLS_DIR = os.path.join(APP_DIR, "skills")
+def _resolve_user_data_dir():
+    override = os.environ.get("SMARTI_DATA_DIR", "").strip()
+    candidates = []
+    if override:
+        candidates.append(os.path.abspath(os.path.expanduser(os.path.expandvars(override))))
+    for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            candidates.append(os.path.join(base, "SmartiAI"))
+    candidates.append(os.path.join(os.path.expanduser("~"), ".smarti"))
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        except Exception:
+            pass
+    return APP_DIR
+
+def _resolve_default_outputs_dir():
+    user_profile = os.environ.get("USERPROFILE", "")
+    documents = os.path.join(user_profile, "Documents") if user_profile else ""
+    if documents and os.path.isdir(documents):
+        return os.path.join(documents, "Smarti_Outputs")
+    return os.path.join(USER_DATA_DIR, "Smarti_Outputs")
+
+USER_DATA_DIR = _resolve_user_data_dir()
+
+LEGACY_SETTINGS_FILE = os.path.join(APP_DIR, "smarti_settings.json")
+LEGACY_USAGE_FILE = os.path.join(APP_DIR, "smarti_usage.json")
+LEGACY_MEMORY_FILE = os.path.join(APP_DIR, "smarti_memory.json")
+LEGACY_MEMORY_EXPORT_FILE = os.path.join(APP_DIR, "smarti_memory.md")
+LEGACY_TOOLS_DIR = os.path.join(APP_DIR, "custom_tools")
+LEGACY_MCP_TOOLS_DIR = os.path.join(APP_DIR, "mcp_tools")
+LEGACY_SKILLS_DIR = os.path.join(APP_DIR, "skills")
+LEGACY_OUTPUTS_DIR = os.path.join(APP_DIR, "Smarti_Outputs")
+LEGACY_MCP_CONFIG_FILE = os.path.join(APP_DIR, "mcp_config.json")
+
+AGENT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_agent.log")
+SETTINGS_FILE = os.path.join(USER_DATA_DIR, "smarti_settings.json")
+USAGE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage.json")
+MEMORY_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.json")
+MEMORY_EXPORT_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.md")
+TOOLS_DIR = os.path.join(USER_DATA_DIR, "custom_tools")
+MCP_TOOLS_DIR = os.path.join(USER_DATA_DIR, "mcp_tools")
+SKILLS_DIR = os.path.join(USER_DATA_DIR, "skills")
 ASSETS_DIR = os.path.join(APP_DIR, "assets")
-OUTPUTS_DIR = os.path.join(APP_DIR, "Smarti_Outputs")
-MCP_CONFIG_FILE = os.path.join(APP_DIR, "mcp_config.json")
-SKILL_LOG_FILE = os.path.join(APP_DIR, "smarti_skills.log")
-AUDIT_LOG_FILE = os.path.join(APP_DIR, "smarti_audit.log")
+OUTPUTS_DIR = _resolve_default_outputs_dir()
+MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
+SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
+AUDIT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_audit.log")
 SETTINGS_SCHEMA_VERSION = 2
+
+logging.basicConfig(filename=AGENT_LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 
 def ensure_ui_svg_asset(filename, svg_text):
     try:
@@ -231,21 +269,24 @@ AUTONOMY_PROFILES = {
         "policy_matrix": copy.deepcopy(DEFAULT_POLICY_MATRIX),
         "raw_shell_requires_approval": True,
         "marketplace_install_requires_approval": True,
-        "require_approval_for_cloud_upload": True
+        "require_approval_for_cloud_upload": True,
+        "write_outside_allowed_dirs_requires_approval": True
     },
     "balanced": {
         "permission_level": 2,
         "policy_matrix": copy.deepcopy(DEFAULT_POLICY_MATRIX),
         "raw_shell_requires_approval": True,
         "marketplace_install_requires_approval": True,
-        "require_approval_for_cloud_upload": True
+        "require_approval_for_cloud_upload": True,
+        "write_outside_allowed_dirs_requires_approval": True
     },
     "max_autonomy": {
         "permission_level": 3,
         "policy_matrix": {cap: "allow" for cap in DEFAULT_POLICY_MATRIX},
         "raw_shell_requires_approval": False,
         "marketplace_install_requires_approval": False,
-        "require_approval_for_cloud_upload": False
+        "require_approval_for_cloud_upload": False,
+        "write_outside_allowed_dirs_requires_approval": False
     }
 }
 

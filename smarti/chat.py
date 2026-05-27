@@ -3,7 +3,7 @@ from .common import *
 from .ui_styles import *
 from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
-from .ui_pages import ActionConfirmDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage
+from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage
 
 def _asset_icon(*filenames):
     for filename in filenames:
@@ -1163,6 +1163,7 @@ class ChatWindow(QMainWindow):
         self.agent_thread = AgentWorker(self.core, text)
         self.agent_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
         self.agent_thread.ask_confirm_signal.connect(self.show_confirm_dialog) 
+        self.agent_thread.api_key_required_signal.connect(self.show_api_key_dialog)
         self.agent_thread.step_signal.connect(self.on_agent_step)
         self.agent_thread.finished_signal.connect(self.on_agent_finished)
         self.agent_thread.start()
@@ -1179,6 +1180,11 @@ class ChatWindow(QMainWindow):
         dlg = ActionConfirmDialog(title, text, self)
         self.agent_thread.confirm_result = (dlg.exec() == QDialog.DialogCode.Accepted)
         self.agent_thread.confirm_event.set()
+
+    def show_api_key_dialog(self, secret_key, provider_label, title, message, help_url):
+        dlg = ApiKeyRequiredDialog(secret_key, provider_label, title, message, help_url, self)
+        self.agent_thread.api_key_result = dlg.api_key() if dlg.exec() == QDialog.DialogCode.Accepted else ""
+        self.agent_thread.api_key_event.set()
 
     def on_agent_finished(self, response):
         should_notify = not self.isActiveWindow() or self.isMinimized()

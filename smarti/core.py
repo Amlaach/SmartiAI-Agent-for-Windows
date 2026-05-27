@@ -7,7 +7,40 @@ from .managers import *
 # ליבת המערכת - SmartiCore
 # ==========================================
 class SmartiCore:
+    def _migrate_legacy_runtime_state(self):
+        if os.path.abspath(USER_DATA_DIR) == os.path.abspath(APP_DIR):
+            return
+        file_pairs = [
+            (LEGACY_SETTINGS_FILE, SETTINGS_FILE),
+            (LEGACY_USAGE_FILE, USAGE_FILE),
+            (LEGACY_MEMORY_FILE, MEMORY_FILE),
+            (LEGACY_MEMORY_EXPORT_FILE, MEMORY_EXPORT_FILE),
+            (LEGACY_MCP_CONFIG_FILE, MCP_CONFIG_FILE),
+        ]
+        for legacy_path, target_path in file_pairs:
+            try:
+                if os.path.exists(legacy_path) and not os.path.exists(target_path):
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    shutil.copy2(legacy_path, target_path)
+                    logging.info(f"Migrated legacy runtime file: {legacy_path} -> {target_path}")
+            except Exception as e:
+                logging.warning(f"Legacy runtime file migration skipped for {legacy_path}: {e}")
+
+        dir_pairs = [
+            (LEGACY_TOOLS_DIR, TOOLS_DIR),
+            (LEGACY_MCP_TOOLS_DIR, MCP_TOOLS_DIR),
+            (LEGACY_SKILLS_DIR, SKILLS_DIR),
+        ]
+        for legacy_path, target_path in dir_pairs:
+            try:
+                if os.path.isdir(legacy_path) and not os.path.exists(target_path):
+                    shutil.copytree(legacy_path, target_path)
+                    logging.info(f"Migrated legacy runtime directory: {legacy_path} -> {target_path}")
+            except Exception as e:
+                logging.warning(f"Legacy runtime directory migration skipped for {legacy_path}: {e}")
+
     def __init__(self):
+        self._migrate_legacy_runtime_state()
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
         _CURRENT_SETTINGS_REF["settings"] = self.settings
@@ -45,6 +78,7 @@ class SmartiCore:
         self.status_callback = None
         self.print_callback = None
         self.ask_user_callback = None 
+        self.api_key_callback = None
         self.step_callback = None
         self.tts_status_callback = None
         self.tts_lock = threading.Lock()
@@ -59,11 +93,12 @@ class SmartiCore:
         self.execute_tool = self._execute_tool_with_audit
         self._background_resume_done = False
 
-    def set_callbacks(self, status_cb, print_cb, ask_user_cb=None, step_cb=None):
+    def set_callbacks(self, status_cb, print_cb, ask_user_cb=None, step_cb=None, api_key_cb=None):
         self.status_callback = status_cb
         self.print_callback = print_cb
         if ask_user_cb: self.ask_user_callback = ask_user_cb
         if step_cb: self.step_callback = step_cb
+        if api_key_cb: self.api_key_callback = api_key_cb
 
     def _ensure_tools_dir(self):
         if not os.path.exists(TOOLS_DIR): os.makedirs(TOOLS_DIR)
@@ -105,7 +140,8 @@ class SmartiCore:
             for setting_key in (
                 "raw_shell_requires_approval",
                 "marketplace_install_requires_approval",
-                "require_approval_for_cloud_upload"
+                "require_approval_for_cloud_upload",
+                "write_outside_allowed_dirs_requires_approval"
             ):
                 if self.settings.get(setting_key) != profile[setting_key]:
                     self.settings[setting_key] = profile[setting_key]
@@ -588,6 +624,13 @@ class SmartiCore:
             return "allow"
         return decision
 
+    def _is_max_autonomy_mode(self):
+        try:
+            level = int(self.settings.get("permission_level", 1) or 1)
+        except Exception:
+            level = 1
+        return self.settings.get("autonomy_mode") == "max_autonomy" or level == 3
+
     def _ensure_capability_allowed(self, capability, title, details="", *, risk="medium"):
         decision = self._policy_decision(capability)
         if getattr(self, "policy_engine", None) and self.policy_engine.force_approval_for(capability, risk):
@@ -620,7 +663,11 @@ class SmartiCore:
             if str(path or "").strip()
         ]
         if allowed_roots and not self._path_in_roots(target_path, allowed_roots):
-            if self.settings.get("write_outside_allowed_dirs_requires_approval", True) and self._policy_decision("file_write") == "allow":
+            if (
+                self.settings.get("write_outside_allowed_dirs_requires_approval", True)
+                and not self._is_max_autonomy_mode()
+                and self._policy_decision("file_write") == "allow"
+            ):
                 details = (
                     "הכתיבה היא מחוץ לתיקיות הכתיבה המועדפות של סמארטי.\n\n"
                     f"נתיב יעד:\n{target_path}\n\n"
@@ -1331,8 +1378,12 @@ class SmartiCore:
                 return {k: v for k, v in args.items() if k in {"action", "param1", "param2"}}
         return args
 
-    def _require_unified_fields(self, op, args, fields):
-        missing = [field for field in fields if args.get(field) in (None, "")]
+    def _require_unified_fields(self, op, args, fields, allow_empty=None):
+        allow_empty = set(allow_empty or [])
+        missing = [
+            field for field in fields
+            if args.get(field) is None or (args.get(field) == "" and field not in allow_empty)
+        ]
         if missing:
             raise ValueError(f"{op} requires: {', '.join(missing)}")
 
@@ -1387,7 +1438,7 @@ class SmartiCore:
                 self._require_unified_fields(op, args, ["path"])
                 return "open_file_or_folder", {"path": args.get("path")}
             if op == "save_text":
-                self._require_unified_fields(op, args, ["path", "content"])
+                self._require_unified_fields(op, args, ["path", "content"], allow_empty={"content"})
                 return "save_text_file", {"path": args.get("path"), "content": args.get("content")}
             if op == "read_document":
                 self._require_unified_fields(op, args, ["path"])
@@ -2068,6 +2119,21 @@ class SmartiCore:
             "tool_turn_text": tool_turn_text,
             "index": call_index,
         }, None, None
+
+    def _preview_step_for_tool_call_entry(self, call_entry, pre_text, schemas_seen=None, call_index=0):
+        try:
+            tool_call = json.loads((call_entry or {}).get("json_str", ""))
+            action = tool_call.get("params", {}).get("name", "")
+            args_dict = tool_call.get("params", {}).get("arguments", {})
+            args_dict = self._normalize_tool_call_args(action, args_dict)
+            local_pre_text = pre_text if call_index == 0 else (call_entry or {}).get("pre_text", "")
+            step_text = self._normalize_step_text(local_pre_text)
+            if step_text:
+                return step_text
+            needs_info, _ = self._tool_requires_info_before_use(action, args_dict, schemas_seen or set())
+            return self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
+        except Exception:
+            return ""
 
     def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures):
         action = call.get("action", "")
@@ -4003,6 +4069,90 @@ class SmartiCore:
             return self._ensure_secret_loaded(f"{provider}_api_key")
         return ""
 
+    def _provider_secret_key(self, provider):
+        provider = str(provider or "").strip().lower()
+        if provider in {"gemini", "openai", "anthropic", "openrouter", "groq"}:
+            return f"{provider}_api_key"
+        return None
+
+    def _provider_display_name(self, provider):
+        return {
+            "gemini": "Google Gemini",
+            "openai": "OpenAI",
+            "anthropic": "Anthropic",
+            "openrouter": "OpenRouter",
+            "groq": "Groq",
+            "tavily": "Tavily",
+        }.get(str(provider or "").strip().lower(), str(provider or "").strip() or "provider")
+
+    def _api_key_help_url(self, secret_key, provider=None):
+        provider = str(provider or "").strip().lower()
+        urls = {
+            "gemini_api_key": "https://aistudio.google.com/app/apikey",
+            "openai_api_key": "https://platform.openai.com/api-keys",
+            "anthropic_api_key": "https://console.anthropic.com/settings/keys",
+            "openrouter_api_key": "https://openrouter.ai/settings/keys",
+            "groq_api_key": "https://console.groq.com/keys",
+            "tavily_api_key": "https://app.tavily.com/",
+        }
+        return urls.get(secret_key) or urls.get(f"{provider}_api_key", "")
+
+    def _request_missing_api_key(self, secret_key, provider_label, title, message, help_url=""):
+        if self._is_background_context():
+            logging.warning(f"Background task needs missing API key for {provider_label}; UI prompt skipped.")
+            return False
+        callback = getattr(self, "api_key_callback", None)
+        if not callback:
+            logging.warning(f"No API-key callback available for missing key: {secret_key}")
+            return False
+        if self.status_callback:
+            self.status_callback(f"נדרש מפתח API עבור {provider_label}...")
+        try:
+            new_key = callback(secret_key, provider_label, title, message, help_url)
+        except Exception as e:
+            logging.warning(f"API-key prompt failed for {secret_key}: {e}")
+            return False
+        new_key = str(new_key or "").strip()
+        if not new_key:
+            return False
+        self.settings[secret_key] = new_key
+        self._save_settings()
+        logging.info(f"API key supplied for {secret_key}.")
+        if secret_key == self._provider_secret_key(self.settings.get("api_mode", self.mode)):
+            self.setup_model()
+        return True
+
+    def _ensure_api_key_available(self, secret_key, provider_label, title=None, message=None, help_url=None):
+        if self._ensure_secret_loaded(secret_key):
+            return True
+        help_url = help_url or self._api_key_help_url(secret_key)
+        title = title or f"חסר מפתח API של {provider_label}"
+        message = message or (
+            f"סמארטי מוגדר להשתמש ב-{provider_label}, אבל לא נשמר מפתח API עבור הספק הזה. "
+            "הזן מפתח כדי להמשיך את הפעולה."
+        )
+        if self._request_missing_api_key(secret_key, provider_label, title, message, help_url):
+            return bool(self._ensure_secret_loaded(secret_key))
+        return False
+
+    def _ensure_active_provider_api_key(self):
+        provider = str(self.settings.get("api_mode", getattr(self, "mode", "gemini")) or "gemini").strip().lower()
+        if provider == "local":
+            if provider != getattr(self, "mode", ""):
+                self.setup_model()
+            return True
+        secret_key = self._provider_secret_key(provider)
+        if not secret_key:
+            return True
+        ok = self._ensure_api_key_available(
+            secret_key,
+            self._provider_display_name(provider),
+            help_url=self._api_key_help_url(secret_key, provider),
+        )
+        if ok and provider != getattr(self, "mode", ""):
+            self.setup_model()
+        return ok
+
     def _log_usage(self, model_name, usage_dict):
         if not usage_dict or not model_name: return
         today = datetime.now().strftime('%Y-%m-%d')
@@ -4627,6 +4777,10 @@ CWD: {current_dir}
             if not is_background_task:
                 self._foreground_cancel_event = run_cancel_event
                 self.cancel_event = run_cancel_event
+            if not self._ensure_active_provider_api_key():
+                provider_label = self._provider_display_name(self.settings.get("api_mode", getattr(self, "mode", "")))
+                final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
+                return final_response
             try:
                 if getattr(self, "memory_manager", None):
                     self.memory_manager.capture_critical_user_details(user_text, source="critical_preflight")
@@ -4715,6 +4869,12 @@ CWD: {current_dir}
                         logging.info("המודל שאל שאלה למשתמש לצד כלי; עוצר לפני הפעלה.")
                         break
                     if feedback_for_ai or not first_call:
+                        preview_step = self._preview_step_for_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
+                        if preview_step and self.step_callback and not self._is_background_context():
+                            try:
+                                self.step_callback(preview_step)
+                            except Exception:
+                                pass
                         logging.warning(feedback_for_ai)
                         self._append_tool_feedback(current_messages, tool_turn_text, "tool_parser", feedback_for_ai or "ERROR: Invalid tool call.")
                         continue
@@ -8271,12 +8431,30 @@ if __name__ == "__main__":
 
     def search_internet(self, query):
         api = self._ensure_secret_loaded("tavily_api_key")
-        if not api: return "ERROR: Tavily key missing."
+        if not api:
+            if not self._ensure_api_key_available(
+                "tavily_api_key",
+                "Tavily",
+                title="חסר מפתח API של Tavily",
+                message="סמארטי מנסה לבצע חיפוש אינטרנט דרך Tavily, אבל לא נשמר מפתח API של Tavily. הזן מפתח כדי להמשיך את החיפוש.",
+                help_url=self._api_key_help_url("tavily_api_key", "tavily"),
+            ):
+                return "ERROR_USER: חסר מפתח API של Tavily. הזן מפתח Tavily כדי להשתמש בחיפוש האינטרנט."
+            api = self._ensure_secret_loaded("tavily_api_key")
         try:
-            res = self._run_cancelable_callable(lambda: self._request_post(get_url(URL_TAVILY), json={"api_key": api, "query": query, "include_answer": "advanced"}, timeout=20))
+            payload = {"query": query, "include_answer": "advanced"}
+            headers = {"Authorization": f"Bearer {api}", "Content-Type": "application/json"}
+            res = self._run_cancelable_callable(lambda: self._request_post(get_url(URL_TAVILY), json=payload, headers=headers, timeout=20))
+            if res.status_code in {400, 401, 403}:
+                legacy_payload = dict(payload)
+                legacy_payload["api_key"] = api
+                legacy_res = self._run_cancelable_callable(lambda: self._request_post(get_url(URL_TAVILY), json=legacy_payload, timeout=20))
+                if legacy_res.status_code < 400 or res.status_code in {401, 403}:
+                    res = legacy_res
             res.raise_for_status()
             d = res.json()
-            return "[UNTRUSTED_WEB_CONTENT]\n" + d.get("answer", "") + "\nURLs:\n" + "\n".join([r.get('url') for r in d.get("results", [])])
+            urls = [str(r.get("url") or "") for r in d.get("results", []) if isinstance(r, dict) and r.get("url")]
+            return "[UNTRUSTED_WEB_CONTENT]\n" + str(d.get("answer", "")) + "\nURLs:\n" + "\n".join(urls)
         except SmartiCancelled:
             raise
         except Exception as e: return f"Error: {e}"

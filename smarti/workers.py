@@ -8,6 +8,7 @@ class AgentWorker(QThread):
     finished_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
     ask_confirm_signal = pyqtSignal(str, str)
+    api_key_required_signal = pyqtSignal(str, str, str, str, str)
     step_signal = pyqtSignal(str)
 
     def __init__(self, core, user_text):
@@ -16,6 +17,8 @@ class AgentWorker(QThread):
         self.user_text = user_text
         self.confirm_event = threading.Event()
         self.confirm_result = False
+        self.api_key_event = threading.Event()
+        self.api_key_result = ""
 
     def ask_user_gui(self, title, text):
         self.confirm_result = False
@@ -26,12 +29,22 @@ class AgentWorker(QThread):
                 return False
         return self.confirm_result
 
+    def ask_api_key_gui(self, secret_key, provider_label, title, message, help_url):
+        self.api_key_result = ""
+        self.api_key_event.clear()
+        self.api_key_required_signal.emit(secret_key, provider_label, title, message, help_url)
+        while not self.api_key_event.wait(0.1):
+            if self.core._is_cancel_requested():
+                return ""
+        return self.api_key_result
+
     def run(self):
         self.core.set_callbacks(
             status_cb=lambda msg: self.status_signal.emit(msg), 
             print_cb=self.core.print_callback,
             ask_user_cb=self.ask_user_gui,
-            step_cb=lambda msg: self.step_signal.emit(msg)
+            step_cb=lambda msg: self.step_signal.emit(msg),
+            api_key_cb=self.ask_api_key_gui
         )
         try:
             response = self.core.send_message(self.user_text)

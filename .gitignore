@@ -1,14 +1,42 @@
-*.log
+# Python
 __pycache__/
-smarti_settings.backup.20260517-022229.json
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and build artifacts
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Smarti runtime data in legacy project-root locations
+*.log
+smarti_settings.json
+smarti_settings.backup.*.json
+smarti_usage.json
+smarti_memory.json
+smarti_memory.md
 mcp_config.json
 Smarti_Outputs/
-skills/
-mcp_tools/
 custom_tools/
+mcp_tools/
+skills/
 browser_session_data/
-smarti_settings.json
-smarti_usage.json
-smarti_memory.md
-smarti_memory.json
-smarti\__pycache__
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini

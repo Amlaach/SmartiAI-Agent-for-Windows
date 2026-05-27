@@ -105,15 +105,13 @@ smarti/                  Modular application code
   managers.py            Settings, memory, MCP, Skills, policy, and registries
   workers.py             QThreads for agent work, voice, TTS, and model loading
 assets/                  Logo, icons, and UI assets
-custom_tools/            Custom Python tools created or used by the agent
-mcp_tools/               Wrappers for installed MCP tools
-skills/                  Installed Skills
-Smarti_Outputs/          Default output folder
 ```
 
 ## Local Data
 
 Smarti stores settings, usage data, memory, and logs in local files such as `smarti_settings.json`, `smarti_memory.json`, `smarti_usage.json`, `smarti_agent.log`, and `smarti_audit.log`. Sensitive and generated files are listed in `.gitignore` so they are not committed by accident.
+
+On Windows, new installs store runtime data under `%APPDATA%\SmartiAI` by default. Generated output files go to `Documents\Smarti_Outputs` when the Documents folder exists. Legacy project-root runtime files are copied forward on first run and left in place.
 
 ## License
 
@@ -226,15 +224,13 @@ smarti/                  קוד האפליקציה המודולרי
   managers.py            הגדרות, זיכרון, MCP, Skills, מדיניות ורישומים
   workers.py             QThreads לעבודת סוכן, קול, TTS וטעינת מודלים
 assets/                  לוגו, אייקונים ונכסי UI
-custom_tools/            כלי Python מותאמים שהסוכן יוצר או משתמש בהם
-mcp_tools/               Wrappers לכלי MCP מותקנים
-skills/                  Skills מותקנים
-Smarti_Outputs/          תיקיית פלט ברירת מחדל
 ```
 
 ## נתונים מקומיים
 
 Smarti שומר הגדרות, נתוני שימוש, זיכרון ולוגים בקבצים מקומיים כמו `smarti_settings.json`, `smarti_memory.json`, `smarti_usage.json`, `smarti_agent.log` ו-`smarti_audit.log`. קבצים רגישים וקבצים שנוצרים בזמן עבודה מופיעים ב-`.gitignore` כדי שלא ייכנסו בטעות ל-commit.
+
+ב-Windows, התקנות חדשות שומרות נתוני Runtime תחת `%APPDATA%\SmartiAI` כברירת מחדל. קבצי פלט נוצרים תחת `Documents\Smarti_Outputs` כאשר תיקיית Documents קיימת. קבצי Runtime ישנים משורש הפרויקט מועתקים קדימה בהפעלה הראשונה ונשארים במקומם.
 
 ## רישיון
 

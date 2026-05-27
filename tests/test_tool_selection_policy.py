@@ -116,6 +116,57 @@ class ToolSelectionPolicyTests(unittest.TestCase):
 
         self.assertTrue(core._should_run_final_verifier_for_task(task_state, "done", {"file_manager": 1}, 1))
 
+    def test_max_autonomy_does_not_prompt_for_write_outside_default_dir(self):
+        core = make_core()
+        asked = []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = f"{tmp}/out"
+            target_path = f"{tmp}/other/result.txt"
+            core.settings["autonomy_mode"] = "max_autonomy"
+            core.settings["permission_level"] = 3
+            core.settings["write_outside_allowed_dirs_requires_approval"] = True
+            core.settings["sandbox_enabled"] = False
+            core.settings["allowed_write_dirs"] = [output_dir]
+            core.ask_user_callback = lambda *args: asked.append(args) or False
+
+            allowed, err = core._ensure_write_allowed(target_path, "test")
+
+        self.assertTrue(allowed, err)
+        self.assertEqual(asked, [])
+
+    def test_file_manager_save_text_allows_empty_content(self):
+        core = make_core()
+
+        ok, err = core._validate_tool_call(
+            "file_manager",
+            {"action": "save_text", "path": "empty.txt", "content": ""},
+        )
+
+        self.assertTrue(ok, err)
+
+    def test_decode_empty_save_text_keeps_first_step_available(self):
+        core = make_core()
+        entry = {
+            "json_str": json.dumps({
+                "method": "tools/call",
+                "params": {
+                    "name": "file_manager",
+                    "arguments": {"action": "save_text", "path": "empty.txt", "content": ""},
+                },
+            }),
+            "tool_turn_text": "",
+        }
+
+        preview = core._preview_step_for_tool_call_entry(entry, "", set())
+        call, feedback, final_candidate = core._decode_tool_call_entry(entry, "", set())
+
+        self.assertTrue(preview)
+        self.assertIsNone(feedback)
+        self.assertIsNone(final_candidate)
+        self.assertEqual(call["action"], "file_manager")
+        self.assertEqual(call["arguments"]["content"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

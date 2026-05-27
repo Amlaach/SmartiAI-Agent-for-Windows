@@ -126,6 +126,65 @@ class ActionConfirmDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+class ApiKeyRequiredDialog(QDialog):
+    def __init__(self, secret_key, provider_label, title, message, help_url="", parent=None):
+        super().__init__(parent)
+        self.secret_key = secret_key
+        self.help_url = help_url
+        self.setWindowTitle(title)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(460)
+        self.setStyleSheet(dialog_stylesheet() + LINE_EDIT_CSS)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header = QLabel(title)
+        header.setWordWrap(True)
+        header.setStyleSheet(section_title_css(18))
+        layout.addWidget(header)
+
+        body = QLabel(str(message or ""))
+        body.setWordWrap(True)
+        body.setStyleSheet(muted_label_css(13))
+        layout.addWidget(body)
+
+        provider_hint = QLabel(f"ספק פעיל: {provider_label}")
+        provider_hint.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 700;")
+        layout.addWidget(provider_hint)
+
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit.setPlaceholderText("הדבק כאן את מפתח ה-API")
+        self.api_key_edit.setClearButtonEnabled(True)
+        layout.addWidget(self.api_key_edit)
+
+        if help_url:
+            link = QLabel(f'<a href="{html.escape(str(help_url), quote=True)}">פתח דף הנפקת מפתחות API</a>')
+            link.setOpenExternalLinks(True)
+            link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            link.setStyleSheet(f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}")
+            layout.addWidget(link)
+
+        note = QLabel("המפתח יישמר כמו שאר המפתחות של סמארטי, ולא יוצג בלוגים.")
+        note.setWordWrap(True)
+        note.setStyleSheet(muted_label_css(12))
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        ok_btn.setText("שמירה והמשך")
+        ok_btn.setEnabled(False)
+        cancel_btn.setText("ביטול")
+        self.api_key_edit.textChanged.connect(lambda text: ok_btn.setEnabled(bool(str(text).strip())))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def api_key(self):
+        return self.api_key_edit.text().strip()
+
 class UsageStatsPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__()
@@ -822,6 +881,9 @@ class SettingsPage(QWidget):
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
         self.cloud_upload_cb.setChecked(self.core.settings.get("require_approval_for_cloud_upload", True))
         self.cloud_upload_cb.setStyleSheet(CHECKBOX_CSS)
+        self.write_outside_dirs_approval_cb = SmartiCheckBox("אישור לפני כתיבה מחוץ לתיקיית הפלט")
+        self.write_outside_dirs_approval_cb.setChecked(self.core.settings.get("write_outside_allowed_dirs_requires_approval", True))
+        self.write_outside_dirs_approval_cb.setStyleSheet(CHECKBOX_CSS)
         self.mcp_pin_cb = SmartiCheckBox("דרוש גרסה קבועה לכלים חיצוניים")
         self.mcp_pin_cb.setChecked(self.core.settings.get("mcp_require_pinned_versions", True))
         self.mcp_pin_cb.setStyleSheet(CHECKBOX_CSS)
@@ -996,6 +1058,7 @@ class SettingsPage(QWidget):
         self._add_hint("אפשרות זו מתירה קריאה בלבד מחוץ לארגז החול. כתיבה, שינוי ומחיקה מחוץ לתיקייה עדיין חסומים.", safety)
         self._add_section_header("קבצים ונתונים", safety)
         self._add_field("תיקיית ברירת מחדל ליצירת קבצים", self.default_output_dir_picker, safety, "כאשר ביקשת ליצור או לשמור קובץ בלי לציין מיקום, סמארטי ישמור אותו כאן. זו לא מגבלת הרשאה ולא ארגז חול.")
+        self._add_checkbox(self.write_outside_dirs_approval_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני כתיבה מחוץ לתיקיית הפלט. באוטונומיה מלאה האפשרות נכבית אוטומטית, אלא אם ארגז חול פעיל.")
         self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.")
         self._add_checkbox(self.mcp_pin_cb, safety, "מחייב התקנת כלים חיצוניים בגרסה קבועה, כדי למנוע שינוי לא צפוי בהתנהגות הכלי.")
         self._add_checkbox(self.raw_shell_approval_cb, safety, "גם במצב אוטונומי, פקודות מערכת בסיכון גבוה יעצרו לאישור משתמש.")
@@ -1155,7 +1218,8 @@ class SettingsPage(QWidget):
             self.sandbox_cb, self.sandbox_read_outside_cb, self.redact_logs_cb, self.audit_log_cb,
             self.developer_trace_cb, self.raw_shell_approval_cb, self.marketplace_approval_cb,
             self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
-            self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb, self.mcp_pin_cb,
+            self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
+            self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
             self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
@@ -1266,6 +1330,7 @@ class SettingsPage(QWidget):
         self.raw_shell_approval_cb.setChecked(bool(profile["raw_shell_requires_approval"]))
         self.marketplace_approval_cb.setChecked(bool(profile["marketplace_install_requires_approval"]))
         self.cloud_upload_cb.setChecked(bool(profile["require_approval_for_cloud_upload"]))
+        self.write_outside_dirs_approval_cb.setChecked(bool(profile["write_outside_allowed_dirs_requires_approval"]))
 
     def on_autonomy_profile_change(self):
         if getattr(self, "_suppress_autosave", False):
@@ -1337,6 +1402,7 @@ class SettingsPage(QWidget):
         action_by_index = {0: "ask", 1: "allow", 2: "deny"}
         self.core.settings["policy_matrix"] = {cap: action_by_index.get(combo.currentIndex(), "ask") for cap, combo in self.policy_combos.items()}
         self.core.settings["require_approval_for_cloud_upload"] = self.cloud_upload_cb.isChecked()
+        self.core.settings["write_outside_allowed_dirs_requires_approval"] = self.write_outside_dirs_approval_cb.isChecked()
         self.core.settings["mcp_require_pinned_versions"] = self.mcp_pin_cb.isChecked()
         self.core.settings["allow_insecure_ssl_compat"] = self.insecure_ssl_cb.isChecked()
         self.core.settings["sandbox_enabled"] = self.sandbox_cb.isChecked()
@@ -1474,11 +1540,11 @@ class SettingsPage(QWidget):
                 self.core._save_settings()
             else:
                 path_by_log = {
-                    "agent": os.path.join(APP_DIR, "smarti_agent.log"),
+                    "agent": AGENT_LOG_FILE,
                     "audit": AUDIT_LOG_FILE,
                     "skills": SKILL_LOG_FILE
                 }
-                path = path_by_log.get(selected, os.path.join(APP_DIR, "smarti_agent.log"))
+                path = path_by_log.get(selected, AGENT_LOG_FILE)
                 with open(path, "w", encoding="utf-8") as f:
                     f.write("")
             logging.info(f"DEVELOPER_LOG | cleared | selected={selected}")
@@ -1510,7 +1576,7 @@ class SettingsPage(QWidget):
         else:
             self.selected_developer_log = "agent"
             lines = ["=== Agent Log ==="]
-            lines.extend(self._tail_file(os.path.join(APP_DIR, "smarti_agent.log"), 300) or ["אין עדיין רשומות Agent Log."])
+            lines.extend(self._tail_file(AGENT_LOG_FILE, 300) or ["אין עדיין רשומות Agent Log."])
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setPlainText("\n".join(lines))
             QTimer.singleShot(0, lambda: self.scroll_developer_log("bottom"))
