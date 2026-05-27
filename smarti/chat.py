@@ -17,13 +17,14 @@ def _asset_icon(*filenames):
 def _escape_with_soft_breaks(text):
     raw = html.unescape(str(text or ""))
     token_re = re.compile(r'(?:[A-Za-z]:\\|\\\\|/|https?://|www\.)[^\s<>{}]{12,}|[^\s<>{}]{42,}')
+    soft_break = "\u200b"
     parts = []
     last = 0
     for match in token_re.finditer(raw):
         parts.append(html.escape(raw[last:match.start()]))
         token = html.escape(match.group(0))
         for marker in ("\\", "/", "_", "-", ".", ":", "="):
-            token = token.replace(marker, marker + "&#8203;")
+            token = token.replace(marker, marker + soft_break)
         parts.append(token)
         last = match.end()
     parts.append(html.escape(raw[last:]))
