@@ -16,8 +16,16 @@ venv/
 env/
 build/
 dist/
+release/
+.build-cache/
+.venv-build/
+runtime/
 *.egg-info/
 pip-wheel-metadata/
+*.7z
+*.msi
+*.nupkg
+*.zip
 
 # Local environment and secrets
 .env

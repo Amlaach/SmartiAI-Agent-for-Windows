@@ -1,0 +1,48 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 1.0.0
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+
+      - name: Build release
+        shell: powershell
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if (-not $version) {
+            if ("${{ github.ref_type }}" -eq "tag") {
+              $version = "${{ github.ref_name }}"
+            } else {
+              $version = "${{ github.sha }}"
+            }
+          }
+          .\scripts\build_release.ps1 -Version $version
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartiAI-Windows
+          path: release/*

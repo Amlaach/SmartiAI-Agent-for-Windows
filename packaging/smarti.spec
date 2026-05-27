@@ -1,0 +1,85 @@
+# -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+
+spec_path = Path(globals().get("__file__", Path(SPECPATH) / "smarti.spec")).resolve()
+repo_root = spec_path.parent.parent
+
+datas = [
+    (str(repo_root / "assets"), "assets"),
+    (str(repo_root / "sitecustomize.py"), "."),
+]
+
+for package in ("certifi", "keyring"):
+    try:
+        datas += collect_data_files(package)
+    except Exception:
+        pass
+
+hiddenimports = []
+for package in (
+    "bs4",
+    "docx",
+    "gtts",
+    "keyring",
+    "litellm",
+    "markdown",
+    "PIL",
+    "PyPDF2",
+    "pyautogui",
+    "pygame",
+    "pytesseract",
+    "selenium",
+    "speech_recognition",
+    "uiautomation",
+):
+    try:
+        hiddenimports += collect_submodules(package)
+    except Exception:
+        pass
+
+
+a = Analysis(
+    [str(repo_root / "smarti_core.pyw")],
+    pathex=[str(repo_root)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="SmartiAI",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="SmartiAI",
+)

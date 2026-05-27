@@ -1,0 +1,208 @@
+[CmdletBinding()]
+param(
+    [string]$Version,
+    [switch]$Clean,
+    [switch]$SkipRuntime,
+    [switch]$SkipInstaller,
+    [switch]$ForceRuntime
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+
+function Resolve-DefaultWorkRoot {
+    if ($env:SMARTI_BUILD_WORK_DIR) { return $env:SMARTI_BUILD_WORK_DIR }
+    $drive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
+    $shortCandidate = Join-Path $drive "SmartiAI-build"
+    try {
+        New-Item -ItemType Directory -Force -Path $shortCandidate | Out-Null
+        $probe = Join-Path $shortCandidate ".write-test"
+        Set-Content -LiteralPath $probe -Value "ok" -Encoding ASCII
+        Remove-Item -LiteralPath $probe -Force
+        return $shortCandidate
+    } catch {
+        return (Join-Path ([System.IO.Path]::GetTempPath()) "SmartiAI-Agent-build")
+    }
+}
+
+$WorkRoot = Resolve-DefaultWorkRoot
+$WorkRoot = [System.IO.Path]::GetFullPath($WorkRoot)
+$BuildDir = Join-Path $WorkRoot "build"
+$DistRoot = Join-Path $WorkRoot "dist"
+$DistDir = Join-Path $DistRoot "SmartiAI"
+$ReleaseDir = Join-Path $RepoRoot "release"
+$BuildVenv = Join-Path $WorkRoot ".venv-build"
+$RuntimeDir = Join-Path $BuildDir "runtime"
+$DownloadCacheDir = Join-Path $WorkRoot ".download-cache"
+$PyInstallerWorkDir = Join-Path $WorkRoot "pyinstaller-work"
+
+function Get-SafeVersion {
+    param([string]$Raw)
+    if (-not $Raw) { return "dev" }
+    $value = $Raw.Trim()
+    if ($value.StartsWith("v")) { $value = $value.Substring(1) }
+    $value = $value -replace "[^A-Za-z0-9_.-]+", "-"
+    if (-not $value) { return "dev" }
+    return $value
+}
+
+function Resolve-ReleaseVersion {
+    if ($Version) { return (Get-SafeVersion $Version) }
+    try {
+        $tag = (& git -C $RepoRoot describe --tags --always --dirty 2>$null)
+        if ($LASTEXITCODE -eq 0 -and "$tag".Trim()) { return (Get-SafeVersion "$tag") }
+    } catch {
+    }
+    return "dev"
+}
+
+function Resolve-HostPython {
+    if ($env:SMARTI_BUILD_PYTHON -and (Test-Path $env:SMARTI_BUILD_PYTHON)) {
+        return $env:SMARTI_BUILD_PYTHON
+    }
+    $probe = "import sys; print(sys.executable)"
+    $candidates = @(
+        @{ Command = "py"; Args = @("-3.12") },
+        @{ Command = "py"; Args = @("-3") },
+        @{ Command = "python"; Args = @() }
+    )
+    foreach ($candidate in $candidates) {
+        try {
+            $cmd = $candidate.Command
+            $args = @($candidate.Args) + @("-c", $probe)
+            $out = & $cmd @args 2>$null
+            if ($LASTEXITCODE -eq 0 -and "$out".Trim()) {
+                return "$out".Trim()
+            }
+        } catch {
+        }
+    }
+    throw "Could not find a host Python. Install Python 3.12 or set SMARTI_BUILD_PYTHON."
+}
+
+function Find-InnoSetup {
+    $cmd = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $candidates = @()
+    if (${env:ProgramFiles(x86)}) { $candidates += Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe" }
+    if ($env:ProgramFiles) { $candidates += Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe" }
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
+$ReleaseVersion = Resolve-ReleaseVersion
+Write-Host "Building SmartiAI release $ReleaseVersion"
+
+if ($Clean) {
+    foreach ($path in @($BuildDir, $DistRoot, $BuildVenv, $DownloadCacheDir, $PyInstallerWorkDir, $ReleaseDir, (Join-Path $RepoRoot "build"), (Join-Path $RepoRoot "dist"), (Join-Path $RepoRoot ".venv-build"))) {
+        if (Test-Path $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $BuildDir, $ReleaseDir, $WorkRoot | Out-Null
+
+$HostPython = Resolve-HostPython
+Write-Host "Host Python: $HostPython"
+
+if (-not (Test-Path (Join-Path $BuildVenv "Scripts\python.exe"))) {
+    Invoke-Checked -FilePath $HostPython -Arguments @("-m", "venv", $BuildVenv)
+}
+$VenvPython = Join-Path $BuildVenv "Scripts\python.exe"
+Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
+Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements.txt"), "-r", (Join-Path $RepoRoot "requirements-build.txt"))
+
+if (-not $SkipRuntime) {
+    $prepareArgs = @(
+        "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $RepoRoot "scripts\prepare_runtime.ps1"),
+        "-RuntimeDir", $RuntimeDir,
+        "-CacheDir", $DownloadCacheDir
+    )
+    if ($ForceRuntime) { $prepareArgs += "-Force" }
+    Invoke-Checked -FilePath "powershell.exe" -Arguments $prepareArgs
+} elseif (-not (Test-Path $RuntimeDir)) {
+    throw "Runtime was skipped, but $RuntimeDir does not exist."
+}
+
+Push-Location $RepoRoot
+try {
+    Invoke-Checked -FilePath $VenvPython -Arguments @(
+        "-m", "PyInstaller",
+        "--clean",
+        "--noconfirm",
+        "--workpath", $PyInstallerWorkDir,
+        "--distpath", $DistRoot,
+        (Join-Path $RepoRoot "packaging\smarti.spec")
+    )
+} finally {
+    Pop-Location
+}
+
+if (-not (Test-Path (Join-Path $DistDir "SmartiAI.exe"))) {
+    throw "PyInstaller output is missing SmartiAI.exe in $DistDir"
+}
+
+$DistRuntime = Join-Path $DistDir "runtime"
+if (Test-Path $DistRuntime) { Remove-Item -LiteralPath $DistRuntime -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $DistRuntime | Out-Null
+Copy-Item -Path (Join-Path $RuntimeDir "*") -Destination $DistRuntime -Recurse -Force
+
+Copy-Item -LiteralPath (Join-Path $RepoRoot "LICENSE") -Destination $DistDir -Force
+Copy-Item -LiteralPath (Join-Path $RepoRoot "README.md") -Destination $DistDir -Force
+
+$gitCommit = ""
+try {
+    $gitCommit = (& git -C $RepoRoot rev-parse --short HEAD 2>$null)
+} catch {
+}
+
+$manifest = [ordered]@{
+    version = $ReleaseVersion
+    builtAt = (Get-Date).ToUniversalTime().ToString("o")
+    gitCommit = "$gitCommit".Trim()
+    appExe = "SmartiAI.exe"
+    runtime = "runtime"
+    pythonExe = "runtime\python\python.exe"
+    nodeExe = "runtime\node\node.exe"
+    npxExe = "runtime\node\npx.cmd"
+}
+$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $DistDir "release_manifest.json") -Encoding UTF8
+
+$zipPath = Join-Path $ReleaseDir "SmartiAI-Agent-for-Windows-$ReleaseVersion-win-x64-portable.zip"
+if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+Compress-Archive -LiteralPath $DistDir -DestinationPath $zipPath -Force
+Write-Host "Portable package: $zipPath"
+
+if (-not $SkipInstaller) {
+    $iscc = Find-InnoSetup
+    if ($iscc) {
+        $iss = Join-Path $RepoRoot "packaging\smarti.iss"
+        $sourceDefine = "/DSourceDir=$DistDir"
+        $outputDefine = "/DOutputDir=$ReleaseDir"
+        $versionDefine = "/DMyAppVersion=$ReleaseVersion"
+        Invoke-Checked -FilePath $iscc -Arguments @($sourceDefine, $outputDefine, $versionDefine, $iss)
+        Write-Host "Installer output directory: $ReleaseDir"
+    } else {
+        Write-Warning "Inno Setup (ISCC.exe) was not found. Portable ZIP was created; install Inno Setup 6 to also build the setup EXE."
+    }
+}
+
+Write-Host "Release build complete."

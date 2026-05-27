@@ -209,11 +209,7 @@ class SmartiCore:
         except Exception: return default
 
     def _python_executable(self):
-        exe = sys.executable
-        if exe.lower().endswith("pythonw.exe"):
-            candidate = os.path.join(os.path.dirname(exe), "python.exe")
-            if os.path.exists(candidate): return candidate
-        return exe
+        return SMARTI_RUNTIME.python_executable(prefer_console=True)
 
     def _truncate_tool_output(self, text):
         limit = self._timeout("max_tool_output_chars", 100000)
@@ -2491,9 +2487,10 @@ class SmartiCore:
     def _add_ssl_sitecustomize_path(self, env):
         existing = env.get("PYTHONPATH", "")
         parts = [p for p in str(existing).split(os.pathsep) if p]
-        app_dir_norm = os.path.normcase(os.path.abspath(APP_DIR))
-        if not any(os.path.normcase(os.path.abspath(p)) == app_dir_norm for p in parts):
-            parts.insert(0, APP_DIR)
+        for support_dir in reversed(SMARTI_RUNTIME.python_support_dirs()):
+            support_norm = os.path.normcase(os.path.abspath(support_dir))
+            if not any(os.path.normcase(os.path.abspath(p)) == support_norm for p in parts):
+                parts.insert(0, support_dir)
         env["PYTHONPATH"] = os.pathsep.join(parts)
         return env
 
@@ -2526,7 +2523,7 @@ class SmartiCore:
         return target
 
     def _subprocess_env(self, env=None):
-        target = os.environ.copy() if env is None else dict(env)
+        target = SMARTI_RUNTIME.subprocess_env(env)
         target.setdefault("PYTHONIOENCODING", "utf-8")
         target.setdefault("PYTHONUTF8", "1")
         return self._sync_ssl_compat_env(target)
@@ -2577,6 +2574,7 @@ class SmartiCore:
             env["SMARTI_SANDBOX_READ_OUTSIDE"] = "1" if self.settings.get("sandbox_allow_read_outside", False) else "0"
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
+        env = SMARTI_RUNTIME.subprocess_env(env)
         return self._sync_ssl_compat_env(env)
 
     def _mcp_launch_args(self, pkg_name):
@@ -3268,7 +3266,8 @@ class SmartiCore:
         candidates = {name}
         if os.name == "nt" and not os.path.splitext(name)[1]:
             candidates.update({f"{name}.exe", f"{name}.cmd", f"{name}.bat"})
-        return any(shutil.which(candidate) for candidate in candidates)
+        env = self._subprocess_env()
+        return any(SMARTI_RUNTIME.which(candidate, env=env) for candidate in candidates)
 
     def _skill_dependency_status(self, spec):
         required_bins = self._skill_required_bins(spec)
@@ -7121,8 +7120,11 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 WIN_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 def get_npx():
-    npx = shutil.which("npx")
-    return npx if npx else ("npx.cmd" if sys.platform == "win32" else "npx")
+    explicit = os.environ.get("SMARTI_NPX_EXE", "").strip()
+    if explicit and os.path.exists(explicit):
+        return explicit
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    return npx
 
 def main():
     if len(sys.argv) < 3:

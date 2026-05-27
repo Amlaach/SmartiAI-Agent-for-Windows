@@ -44,6 +44,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import urllib3
 
+from .runtime import SMARTI_RUNTIME
 from .ssl_compat import apply_insecure_ssl_compat
 
 LITELLM_INSTALLED = importlib.util.find_spec("litellm") is not None
@@ -98,7 +99,9 @@ PILLOW_INSTALLED = importlib.util.find_spec("PIL") is not None
 SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None and importlib.util.find_spec("keyboard") is not None
 TTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
 
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_DIR = SMARTI_RUNTIME.app_dir
+RESOURCE_DIR = SMARTI_RUNTIME.resource_dir
+RUNTIME_DIR = SMARTI_RUNTIME.runtime_dir
 
 def _resolve_user_data_dir():
     override = os.environ.get("SMARTI_DATA_DIR", "").strip()
@@ -144,7 +147,7 @@ MEMORY_EXPORT_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.md")
 TOOLS_DIR = os.path.join(USER_DATA_DIR, "custom_tools")
 MCP_TOOLS_DIR = os.path.join(USER_DATA_DIR, "mcp_tools")
 SKILLS_DIR = os.path.join(USER_DATA_DIR, "skills")
-ASSETS_DIR = os.path.join(APP_DIR, "assets")
+ASSETS_DIR = SMARTI_RUNTIME.resource_path("assets")
 OUTPUTS_DIR = _resolve_default_outputs_dir()
 MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
 SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
