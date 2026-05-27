@@ -7,6 +7,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+tests/
+
 
 # Virtual environments and build artifacts
 .venv/
