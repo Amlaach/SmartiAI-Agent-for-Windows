@@ -10,6 +10,8 @@ This folder contains the release recipe for SmartiAI Agent for Windows.
 - A portable ZIP under `release/`.
 - A setup EXE under `release/` when Inno Setup 6 is installed.
 
+The application EXE, setup EXE, and installer shortcuts use `assets/smarti.ico`.
+
 ## Build locally
 
 From the repository root:

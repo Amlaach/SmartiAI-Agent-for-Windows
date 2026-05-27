@@ -92,7 +92,7 @@ The source tree stays clean in Git. Build artifacts and downloaded runtimes are 
 .\scripts\build_release.ps1 -Version 1.0.0
 ```
 
-The build creates a PyInstaller `SmartiAI.exe`, copies the required assets, and adds private runtimes under `runtime\python` and `runtime\node`. Packaged Smarti uses those private runtimes for custom Python tools, MCP packages, and Skill requirement installs. Source runs continue to use Python and Node from the developer machine.
+The build creates a PyInstaller `SmartiAI.exe` with the `assets\smarti.ico` application icon, copies the required assets, and adds private runtimes under `runtime\python` and `runtime\node`. Packaged Smarti uses those private runtimes for custom Python tools, MCP packages, and Skill requirement installs. Source runs continue to use Python and Node from the developer machine.
 
 Outputs are written to `release\`: a portable ZIP is always created, and a setup EXE is created when Inno Setup 6 is installed. The installer is per-user by default (`%LOCALAPPDATA%\Programs\SmartiAI`) so Smarti can keep installing dynamic tools without administrator rights.
 
@@ -226,7 +226,7 @@ pythonw smarti_core.pyw
 .\scripts\build_release.ps1 -Version 1.0.0
 ```
 
-הבנייה יוצרת `SmartiAI.exe` עם PyInstaller, מעתיקה את נכסי הממשק, ומוסיפה runtimes פרטיים תחת `runtime\python` ו-`runtime\node`. גרסה ארוזה של Smarti משתמשת בהם עבור כלי Python דינמיים, חבילות MCP והתקנת דרישות של Skills. בהרצה מהמקור Smarti ממשיך להשתמש ב-Python וב-Node שמותקנים במחשב הפיתוח.
+הבנייה יוצרת `SmartiAI.exe` עם PyInstaller ועם אייקון היישום `assets\smarti.ico`, מעתיקה את נכסי הממשק, ומוסיפה runtimes פרטיים תחת `runtime\python` ו-`runtime\node`. גרסה ארוזה של Smarti משתמשת בהם עבור כלי Python דינמיים, חבילות MCP והתקנת דרישות של Skills. בהרצה מהמקור Smarti ממשיך להשתמש ב-Python וב-Node שמותקנים במחשב הפיתוח.
 
 התוצרים נכתבים אל `release\`: תמיד נוצר ZIP נייד, ונוצר גם קובץ התקנה כאשר Inno Setup 6 מותקן. ברירת המחדל של ההתקנה היא פר-משתמש (`%LOCALAPPDATA%\Programs\SmartiAI`), כדי ש-Smarti יוכל להמשיך להתקין כלים דינמיים בלי הרשאות מנהל.
 

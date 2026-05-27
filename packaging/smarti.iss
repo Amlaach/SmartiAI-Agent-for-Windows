@@ -14,6 +14,10 @@
 #define OutputDir "..\release"
 #endif
 
+#ifndef IconFile
+#define IconFile "..\assets\smarti.ico"
+#endif
+
 [Setup]
 AppId={{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}
 AppName={#MyAppName}
@@ -24,6 +28,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
 OutputBaseFilename=SmartiAI-Agent-for-Windows-{#MyAppVersion}-Setup
+SetupIconFile={#IconFile}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -42,8 +47,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

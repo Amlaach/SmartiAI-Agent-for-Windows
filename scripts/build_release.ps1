@@ -198,7 +198,8 @@ if (-not $SkipInstaller) {
         $sourceDefine = "/DSourceDir=$DistDir"
         $outputDefine = "/DOutputDir=$ReleaseDir"
         $versionDefine = "/DMyAppVersion=$ReleaseVersion"
-        Invoke-Checked -FilePath $iscc -Arguments @($sourceDefine, $outputDefine, $versionDefine, $iss)
+        $iconDefine = "/DIconFile=$(Join-Path $RepoRoot 'assets\smarti.ico')"
+        Invoke-Checked -FilePath $iscc -Arguments @($sourceDefine, $outputDefine, $versionDefine, $iconDefine, $iss)
         Write-Host "Installer output directory: $ReleaseDir"
     } else {
         Write-Warning "Inno Setup (ISCC.exe) was not found. Portable ZIP was created; install Inno Setup 6 to also build the setup EXE."
