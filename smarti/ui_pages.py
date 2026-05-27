@@ -425,7 +425,10 @@ class TaskCenterPage(QWidget):
         for i in reversed(range(self.content_layout.count())):
             item = self.content_layout.itemAt(i)
             if item and item.widget(): item.widget().deleteLater()
-        tasks = list(self.core.settings.get("background_tasks", []))
+        tasks = [
+            task for task in self.core.settings.get("background_tasks", [])
+            if task.get("status") in {"scheduled", "running", "cancelling"}
+        ]
         if not tasks:
             empty = QLabel("אין משימות רקע פעילות.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -456,6 +459,9 @@ class TaskCenterPage(QWidget):
                 btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 btn.setStyleSheet(SECONDARY_BUTTON_CSS)
             task_id = task.get("id", "")
+            status = str(task.get("status", ""))
+            cancel_btn.setEnabled(status in {"scheduled", "running"})
+            retry_btn.setEnabled(status not in {"running", "cancelling"})
             cancel_btn.clicked.connect(lambda checked=False, tid=task_id: self._cancel_task(tid))
             retry_btn.clicked.connect(lambda checked=False, tid=task_id: self._retry_task(tid))
             actions.addWidget(cancel_btn)
@@ -465,11 +471,15 @@ class TaskCenterPage(QWidget):
             self.content_layout.addWidget(card)
 
     def _cancel_task(self, task_id):
-        self.core.cancel_background_task(task_id)
+        result = self.core.cancel_background_task(task_id)
+        if str(result).startswith("ERROR"):
+            QMessageBox.warning(self, "ביטול משימה", result)
         self.load_tasks()
 
     def _retry_task(self, task_id):
-        self.core.retry_background_task(task_id, 0)
+        result = self.core.retry_background_task(task_id, 0)
+        if str(result).startswith("ERROR"):
+            QMessageBox.warning(self, "הרצת משימה מחדש", result)
         self.load_tasks()
 
 class DeveloperTracePage(QWidget):
@@ -1602,38 +1612,170 @@ class AboutPage(QWidget):
         
         top_bar = QHBoxLayout()
         top_bar.addWidget(create_back_button(lambda: self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)))
-        title = QLabel("אודות SmartiAI Agent for Windows")
+        title = QLabel("אודות")
         title.setStyleSheet(page_title_css(18))
         top_bar.addWidget(title)
         top_bar.addStretch()
         layout.addLayout(top_bar)
-        
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 8, 0, 8)
+        content_layout.setSpacing(16)
+        self.scroll.setWidget(content)
+        layout.addWidget(self.scroll)
+
+        hero = QFrame()
+        hero.setStyleSheet(card_css(18, 8))
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(18)
+
         logo_lbl = QLabel()
+        logo_lbl.setFixedSize(152, 152)
         logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_lbl.setStyleSheet("border: none; background: transparent;")
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
-        if os.path.exists(logo_path): logo_lbl.setPixmap(make_circular_pixmap(logo_path, 100, ACCENT_COLOR, 3))
+        if os.path.exists(logo_path):
+            pixmap = QPixmap(logo_path)
+            if not pixmap.isNull():
+                logo_lbl.setPixmap(pixmap.scaled(146, 146, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
             logo_lbl.setText("S")
-            logo_lbl.setFont(QFont("Segoe UI", 50, QFont.Weight.Bold))
-            logo_lbl.setStyleSheet(f"color: {ACCENT_COLOR};")
-            
-        layout.addSpacing(30)
-        layout.addWidget(logo_lbl)
-        layout.addSpacing(20)
-        
-        desc = QLabel(
-            "<b>סמארטי (Smarti AI)</b><br><br>"
-            "סוכן אוטונומי חכם למערכת ווינדוס.<br>"
-            "תומך אינטגרציית כלים מקיפה בפרוטוקול MCP (Model Context Protocol).<br><br>"
-            "פותח ע\"י א.מ.ד. - 2026<br>"
-            "em0548438097@gmail.com<br>"
-            "גרסה: V0.85 - Unified JSON Architecture"
+            logo_lbl.setFont(QFont("Segoe UI", 46, QFont.Weight.Bold))
+            logo_lbl.setStyleSheet(f"color: {ACCENT_COLOR}; border: none; background: transparent;")
+
+        hero_text = QVBoxLayout()
+        hero_text.setSpacing(7)
+        app_name = QLabel("Smarti AI Agent for Windows")
+        app_name.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 22px; font-weight: 800; border: none;")
+        app_name.setWordWrap(True)
+        tagline = QLabel("סוכן עבודה אישי ל-Windows שמבין משימות, מפעיל כלים מקומיים, עובד עם קבצים, אינטרנט, דפדפן, אימייל ומשימות רקע, ומסכם תוצאות בעברית.")
+        tagline.setStyleSheet(muted_label_css(13) + " border: none;")
+        tagline.setWordWrap(True)
+        version = QLabel(f"גרסה {APP_VERSION}")
+        version.setStyleSheet(
+            f"background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: none; "
+            "border-radius: 14px; padding: 6px 10px; font-size: 12px; font-weight: 800;"
         )
-        desc.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px; line-height: 1.5;")
-        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        hero_text.addWidget(app_name)
+        hero_text.addWidget(tagline)
+        hero_text.addWidget(version, 0, Qt.AlignmentFlag.AlignRight)
+        hero_text.addStretch()
+
+        hero_layout.addWidget(logo_lbl, 0, Qt.AlignmentFlag.AlignTop)
+        hero_layout.addLayout(hero_text, 1)
+        content_layout.addWidget(hero)
+
+        overview = QLabel(
+            "סמארטי בנוי כשותף עבודה מקומי: הוא יכול לתכנן, לבצע, לבדוק ולחזור עם תוצאה שימושית, תוך שמירה על מדיניות הרשאות, לוגים ואוטונומיה שניתנת לשליטה מההגדרות."
+        )
+        overview.setWordWrap(True)
+        overview.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; line-height: 1.5;")
+        content_layout.addWidget(overview)
+
+        github_btn = QPushButton("GitHub: menachem-dadon/SmartiAI-Agent-for-Windows")
+        github_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        github_btn.setToolTip("פתיחת מאגר הפרויקט ב-GitHub")
+        github_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 18px; padding: 11px 14px; font-size: 13px; font-weight: 800; text-align: center; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; color: {ACCENT_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+        )
+        github_btn.clicked.connect(lambda: webbrowser.open("https://github.com/menachem-dadon/SmartiAI-Agent-for-Windows"))
+        content_layout.addWidget(github_btn)
+
+        content_layout.addWidget(self._section_title("יכולות מרכזיות"))
+        features = QGridLayout()
+        features.setSpacing(10)
+        feature_items = [
+            ("קבצים ומסמכים", "חיפוש, קריאה, סיכום, יצירת קבצי טקסט, OCR ותיקיות עבודה."),
+            ("אינטרנט ודפדפן", "חיפוש מידע עדכני, קריאת אתרים ואוטומציה בדפדפן ייעודי."),
+            ("משימות רקע", "תזמון בדיקות, תזכורות, משימות מחזוריות והרצה מחדש."),
+            ("אימייל", "חיפוש, קריאה, טיוטות, שליחה, ארכוב וניהול קבצים מצורפים."),
+            ("זיכרון שימושי", "שמירת העדפות ופרטי הקשר שחוזרים על עצמם כדי לעבוד מהר יותר."),
+            ("שליטה במחשב", "פתיחת תוכנות, עבודה עם חלונות ופעולות UI כשמאשרים זאת בהגדרות."),
+        ]
+        for index, (heading, body) in enumerate(feature_items):
+            features.addWidget(self._feature_card(heading, body), index // 2, index % 2)
+        content_layout.addLayout(features)
+
+        content_layout.addWidget(self._section_title("דוגמאות יומיומיות"))
+        examples = [
+            "מצא מדריך אמין לתיקון קטן בבית, חלץ רשימת ציוד וצור קובץ קניות.",
+            "בדוק פעם ביום תחזית, עומסי תנועה או מחיר מוצר, וסכם רק כשיש שינוי חשוב.",
+            "קרא מסמך ארוך, מצא סעיפים לביצוע והכן טיוטת מייל המשך.",
+            "סרוק תיקייה של קבלות או מסמכים, ארגן שמות קבצים והכן תקציר.",
+            "פתח אתר עבודה קבוע, אסוף נתונים שחוזרים על עצמם והדבק אותם לקובץ מעקב.",
+        ]
+        for example in examples:
+            content_layout.addWidget(self._example_row(example))
+
+        note = QFrame()
+        note.setStyleSheet(card_css(12, 8))
+        note_layout = QVBoxLayout(note)
+        note_layout.setSpacing(6)
+        note_title = QLabel("פרטיות ובטיחות")
+        note_title.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 15px; font-weight: 800; border: none;")
+        note_body = QLabel("פעולות רגישות נשלטות דרך פרופיל האוטונומיה ומדיניות הכלים. מחיקת קבצים עוברת לסל המחזור, וסודות נשמרים במנגנוני האחסון המאובטחים של Windows כשהם זמינים.")
+        note_body.setWordWrap(True)
+        note_body.setStyleSheet(muted_label_css(13) + " border: none;")
+        note_layout.addWidget(note_title)
+        note_layout.addWidget(note_body)
+        content_layout.addWidget(note)
+
+        footer = QLabel("פותח ע\"י א.מ.ד. | 2026 | em0548438097@gmail.com")
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setWordWrap(True)
+        footer.setStyleSheet(muted_label_css(12))
+        content_layout.addWidget(footer)
+        content_layout.addStretch()
+
+    def _section_title(self, text):
+        label = QLabel(text)
+        label.setStyleSheet(section_title_css(16))
+        return label
+
+    def _feature_card(self, heading, body):
+        card = QFrame()
+        card.setStyleSheet(card_css(12, 8))
+        card.setMinimumHeight(108)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(6)
+        title = QLabel(heading)
+        title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none;")
+        title.setWordWrap(True)
+        desc = QLabel(body)
+        desc.setStyleSheet(muted_label_css(12) + " border: none;")
         desc.setWordWrap(True)
-        layout.addWidget(desc)
-        layout.addStretch()
+        card_layout.addWidget(title)
+        card_layout.addWidget(desc)
+        card_layout.addStretch()
+        return card
+
+    def _example_row(self, text):
+        row = QFrame()
+        row.setStyleSheet(
+            f"QFrame {{ background: {ACCENT_TINT}; border: none; border-radius: 16px; }}"
+            "QLabel { border: none; background: transparent; }"
+        )
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(14, 10, 14, 10)
+        marker = QLabel("✓")
+        marker.setStyleSheet(f"color: {ACCENT_SECONDARY_COLOR}; font-size: 15px; font-weight: 900;")
+        body = QLabel(text)
+        body.setWordWrap(True)
+        body.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px;")
+        row_layout.addWidget(marker, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(body, 1)
+        return row
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

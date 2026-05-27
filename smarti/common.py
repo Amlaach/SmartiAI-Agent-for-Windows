@@ -153,6 +153,7 @@ MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
 SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
 AUDIT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_audit.log")
 SETTINGS_SCHEMA_VERSION = 2
+APP_VERSION = "V0.67"
 
 logging.basicConfig(filename=AGENT_LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 

@@ -924,7 +924,8 @@ class SmartiMemoryManager:
                 "- User memory is always included for stable personalization; tool memory is injected only when recent and relevant.\n"
                 "- Use short_term/tool memory only for continuity.\n"
                 "- Expired memories are pruned before retrieval. Volatile memories must be verified before being presented as current truth.\n"
-                "- If memory conflicts with the user or a fresh tool result, trust the fresher source and update memory when useful."
+                "- If memory conflicts with the user or a fresh tool result, trust the fresher source and update memory when useful.\n"
+                "- When a repeated question depends on the current environment or external state, re-check it; do not repeat an old answer from memory."
                 f"{live_warning}\n\nRetrieved memory (bounded local RAG, {self.RETRIEVER_NAME}):\n{body}"
             )
         else:
@@ -1265,6 +1266,16 @@ class AgentRuntime:
     def _tool_call_entries_from_obj(self, text, start, end, raw, obj):
         if isinstance(obj, dict) and obj.get("method") == "tools/call":
             return [self._tool_call_entry(text, start, end, raw)]
+        if isinstance(obj, dict):
+            method = str(obj.get("method", "") or "").strip()
+            if method in BUILTIN_TOOL_SCHEMAS:
+                params = obj.get("params", {})
+                if not isinstance(params, dict):
+                    params = {}
+                arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else params
+                call_obj = {"method": "tools/call", "params": {"name": method, "arguments": arguments if isinstance(arguments, dict) else {}}}
+                call_raw = json.dumps(call_obj, ensure_ascii=False)
+                return [self._tool_call_entry(text, start, end, call_raw)]
         calls = []
         raw_calls = []
         if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):

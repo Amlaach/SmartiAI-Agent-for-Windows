@@ -14,6 +14,29 @@ def _asset_icon(*filenames):
                 return icon
     return QIcon()
 
+def _escape_with_soft_breaks(text):
+    raw = html.unescape(str(text or ""))
+    token_re = re.compile(r'(?:[A-Za-z]:\\|\\\\|/|https?://|www\.)[^\s<>{}]{12,}|[^\s<>{}]{42,}')
+    parts = []
+    last = 0
+    for match in token_re.finditer(raw):
+        parts.append(html.escape(raw[last:match.start()]))
+        token = html.escape(match.group(0))
+        for marker in ("\\", "/", "_", "-", ".", ":", "="):
+            token = token.replace(marker, marker + "&#8203;")
+        parts.append(token)
+        last = match.end()
+    parts.append(html.escape(raw[last:]))
+    return "".join(parts)
+
+def _clean_step_for_display(text):
+    clean = html.unescape(str(text or "")).strip()
+    clean = re.sub(r'```.*?```', '', clean, flags=re.DOTALL).strip()
+    if "tools/call" in clean or re.search(r'(?i)"method"\s*:\s*"(?:tools/call|agent_[^"]*|agent_planner)"', clean):
+        clean = clean.split("{", 1)[0].strip()
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
+
 class PillInputFrame(QFrame):
     CORNER_RADIUS = 40.5
 
@@ -97,6 +120,8 @@ class MessageBubble(QFrame):
         self.steps_label = StepsShimmerLabel()
         self.steps_label.setTextFormat(Qt.TextFormat.RichText)
         self.steps_label.setWordWrap(True)
+        self.steps_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.steps_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.steps_label.setMaximumWidth(self.max_w)
         
         self.steps_layout.addWidget(self.toggle_btn)
@@ -108,6 +133,7 @@ class MessageBubble(QFrame):
         self.final_label.setWordWrap(True)
         self.final_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.TextSelectableByMouse)
         self.final_label.setOpenExternalLinks(True)
+        self.final_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.final_label.setMaximumWidth(self.max_w)
         
         self.main_layout.addWidget(self.steps_container)
@@ -162,11 +188,14 @@ class MessageBubble(QFrame):
             parent.updateGeometry()
 
     def add_step(self, step_text):
-        clean_step = html.escape(step_text.replace('\n', ' ').strip())
+        display_step = _clean_step_for_display(str(step_text or "").replace('\n', ' '))
+        if "{" in display_step and "}" in display_step:
+            display_step = display_step.split("{", 1)[0].strip()
+        clean_step = _escape_with_soft_breaks(display_step)
         if not clean_step: return
         if not self.copy_text:
-            self.copy_text = step_text.replace('\n', ' ').strip()
-        self.steps_text_html += f"<div style='margin-bottom: 2px;'>• {clean_step}</div>"
+            self.copy_text = display_step
+        self.steps_text_html += f"<div style='margin-bottom: 2px; word-wrap: break-word;'>• {clean_step}</div>"
         self.steps_label.setText(self.steps_text_html)
         self.steps_container.show()
         self.start_steps_shimmer()
@@ -179,7 +208,7 @@ class MessageBubble(QFrame):
         self.copy_text = display_text
         self.stop_steps_shimmer()
         self.final_label.show()
-        safe_text = html.escape(display_text)
+        safe_text = _escape_with_soft_breaks(display_text)
         if MARKDOWN_INSTALLED and not self.is_user:
             try:
                 import markdown
@@ -704,7 +733,7 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "logo_lbl"):
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
-                pixmap = make_circular_pixmap(logo_path, 50, ACCENT_COLOR, 2)
+                pixmap = make_circular_pixmap(logo_path, 50)
                 if pixmap:
                     self.logo_lbl.setPixmap(pixmap)
             self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
@@ -789,13 +818,13 @@ class ChatWindow(QMainWindow):
         self.logo_lbl.setFixedSize(50, 50)
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(logo_path):
-            circular_pixmap = make_circular_pixmap(logo_path, 50, ACCENT_COLOR, 2)
+            circular_pixmap = make_circular_pixmap(logo_path, 50)
             if circular_pixmap: self.logo_lbl.setPixmap(circular_pixmap)
             self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
         else:
             self.logo_lbl.setText("S")
             self.logo_lbl.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-            self.logo_lbl.setStyleSheet(f"border: 2px solid {ACCENT_COLOR}; border-radius: 25px; background-color: transparent;")
+            self.logo_lbl.setStyleSheet(f"border: none; border-radius: 25px; background-color: transparent; color: {ACCENT_COLOR};")
             self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
         top_layout.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)

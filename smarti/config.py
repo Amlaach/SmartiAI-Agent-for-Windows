@@ -133,6 +133,14 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["path"]
         }
     },
+    "trash_file_or_folder": {
+        "description": "מעביר קובץ או תיקייה לסל המחזור של Windows. מיועד לכל בקשת מחיקה של קבצי משתמש; אינו מוחק לצמיתות.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ או לתיקייה להעברה לסל המחזור"}},
+            "required": ["path"]
+        }
+    },
     "list_software": {
         "description": "מציג את התוכנות המותקנות במחשב.",
         "inputSchema": {
@@ -562,12 +570,12 @@ BUILTIN_TOOL_SCHEMAS["software_manager"] = {
 }
 
 BUILTIN_TOOL_SCHEMAS["file_manager"] = {
-    "description": "Unified file tool for safe open, text save, document read, filename search, content search, and OCR.",
+    "description": "Unified file tool for safe open, text save, document read, filename search, content search, OCR, and moving files/folders to the recycle bin.",
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["open", "save_text", "read_document", "search_files", "search_content", "extract_image_text"], "description": "File operation."},
-            "path": {"type": "string", "description": "File/folder path for open, save_text, read_document, or extract_image_text."},
+            "action": {"type": "string", "enum": ["open", "save_text", "read_document", "search_files", "search_content", "extract_image_text", "trash"], "description": "File operation. Use trash for delete requests; it moves to Recycle Bin."},
+            "path": {"type": "string", "description": "File/folder path for open, save_text, read_document, extract_image_text, or trash."},
             "content": {"type": "string", "description": "Text content for save_text."},
             "query": {"type": "string", "description": "Filename query for search_files."},
             "directory": {"type": "string", "description": "Directory for search_content."},
@@ -696,7 +704,7 @@ BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
-    "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text.",
+    "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text, trash-to-Recycle-Bin.",
     "web_manager": "Unified web: search, read, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
