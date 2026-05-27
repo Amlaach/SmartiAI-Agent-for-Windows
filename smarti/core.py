@@ -690,6 +690,8 @@ class SmartiCore:
             per_output_limit = 12000
         entry = {
             "time": datetime.now().isoformat(timespec="seconds"),
+            "task_id": getattr(self._execution_context, "current_task_id", ""),
+            "objective": str(getattr(self._execution_context, "current_task_objective", "") or "")[:700],
             "loop": getattr(self._execution_context, "loop_iteration", None),
             "tool": str(action or ""),
             "status": str(status or ""),
@@ -715,7 +717,56 @@ class SmartiCore:
             while transcript and len(json.dumps(transcript, ensure_ascii=False, default=str)) > max_chars:
                 transcript.pop(0)
 
-    def _tool_context_prompt(self):
+    def _tool_context_tokens(self, text):
+        return {
+            token.lower()
+            for token in re.findall(r"[\w\u0590-\u05ff]{2,}", str(text or "").lower(), flags=re.UNICODE)
+            if len(token) >= 2
+        }
+
+    def _tool_context_score(self, entry, query_tokens, now=None):
+        if not query_tokens:
+            return 0.0
+        now = now or datetime.now()
+        haystack = " ".join(
+            str(entry.get(key, "") or "")
+            for key in ("objective", "tool", "status", "arguments", "output")
+        )
+        tokens = self._tool_context_tokens(haystack)
+        if not tokens:
+            return 0.0
+        overlap = len(query_tokens & tokens)
+        if not overlap:
+            return 0.0
+        score = float(overlap)
+        try:
+            ts = datetime.fromisoformat(str(entry.get("time", "")))
+            age_hours = max(0.0, (now - ts).total_seconds() / 3600.0)
+            if age_hours <= 1:
+                score += 2.0
+            elif age_hours <= 24:
+                score += 1.0
+        except Exception:
+            pass
+        if entry.get("status") == "error":
+            score += 0.5
+        return score
+
+    def _format_tool_context_entry(self, entry, output_limit):
+        output = str(entry.get("output", "") or "").replace(chr(10), " ")
+        if len(output) > output_limit:
+            output = output[:output_limit].rstrip() + " ... [output preview shortened; full local transcript retained]"
+        objective = str(entry.get("objective", "") or "").replace(chr(10), " ")[:240]
+        objective_line = f"  objective={objective}\n" if objective else ""
+        task_line = f" task={entry.get('task_id')}" if entry.get("task_id") else ""
+        return (
+            f"- time={entry.get('time')} loop={entry.get('loop')}{task_line} tool={entry.get('tool')} status={entry.get('status')}\n"
+            f"{objective_line}"
+            f"  arguments={entry.get('arguments', '')}\n"
+            f"  output={output}"
+        )
+
+    def _tool_context_prompt(self, query=""):
         transcript = self.settings.get("tool_context_transcript", [])
         if not isinstance(transcript, list) or not transcript:
             return "No tool calls have been recorded in this conversation yet."
@@ -723,28 +774,71 @@ class SmartiCore:
             budget = max(4000, int(self.settings.get("max_tool_context_prompt_chars", 30000) or 30000))
         except Exception:
             budget = 30000
+        current_task_id = str(getattr(self._execution_context, "current_task_id", "") or "")
+        indexed = list(enumerate(transcript))
+        current_task_entries = [(idx, entry) for idx, entry in indexed if current_task_id and entry.get("task_id") == current_task_id]
+        historical_entries = [(idx, entry) for idx, entry in indexed if not current_task_id or entry.get("task_id") != current_task_id]
+
+        try:
+            recent_n = max(0, int(self.settings.get("historical_tool_context_recent_entries", 12) or 12))
+        except Exception:
+            recent_n = 12
+        try:
+            relevant_n = max(0, int(self.settings.get("historical_tool_context_relevant_entries", 8) or 8))
+        except Exception:
+            relevant_n = 8
+        try:
+            historical_output_limit = max(600, int(self.settings.get("historical_tool_context_output_chars", 2200) or 2200))
+        except Exception:
+            historical_output_limit = 2200
+        try:
+            min_score = float(self.settings.get("historical_tool_context_min_score", 2.0) or 2.0)
+        except Exception:
+            min_score = 2.0
+
+        selected = list(current_task_entries)
+        recent = historical_entries[-recent_n:] if recent_n else []
+        selected.extend(recent)
+        selected_ids = {idx for idx, _ in selected}
+        query_tokens = self._tool_context_tokens(query)
+        now = datetime.now()
+        scored = []
+        older_candidates = historical_entries[:-recent_n] if recent_n else historical_entries
+        for idx, entry in older_candidates:
+            if idx in selected_ids:
+                continue
+            score = self._tool_context_score(entry, query_tokens, now=now)
+            if score >= min_score:
+                scored.append((score, idx, entry))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        for _, idx, entry in scored[:relevant_n]:
+            selected.append((idx, entry))
+            selected_ids.add(idx)
+        selected.sort(key=lambda item: item[0])
+
         rows = []
         used = 0
-        omitted = 0
-        for entry in reversed(transcript):
-            block = (
-                f"- time={entry.get('time')} loop={entry.get('loop')} tool={entry.get('tool')} status={entry.get('status')}\n"
-                f"  arguments={entry.get('arguments', '')}\n"
-                f"  output={str(entry.get('output', '')).replace(chr(10), ' ')[:6000]}"
-            )
+        omitted = max(0, len(transcript) - len(selected_ids))
+        budget_omitted = 0
+        for _, entry in selected:
+            is_current_task = bool(current_task_id and entry.get("task_id") == current_task_id)
+            output_limit = 6000 if is_current_task else historical_output_limit
+            block = self._format_tool_context_entry(entry, output_limit)
             block_len = len(block) + 1
             if rows and used + block_len > budget:
-                omitted += 1
+                budget_omitted += 1
                 continue
             if not rows and block_len > budget:
                 block = block[:budget] + "\n  [tool context truncated]"
                 block_len = len(block)
             rows.append(block)
             used += block_len
-        rows.reverse()
         prefix = ""
-        if omitted:
-            prefix = f"[Earlier tool-context entries omitted from prompt due to budget: {omitted}. Full local transcript remains in settings for this session.]\n"
+        if omitted or budget_omitted:
+            prefix = (
+                f"[Historical tool-context entries not injected: relevance/recency omitted={omitted}, budget omitted={budget_omitted}. "
+                "Full local transcript remains in settings; use memory search or targeted tools if older details are needed.]\n"
+            )
         return prefix + "\n".join(rows)
 
     def _wrap_tool_output_for_model(self, action, feedback, is_error=False):
@@ -1710,6 +1804,8 @@ class SmartiCore:
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
+            if self._is_budget_exception(e):
+                raise
             self._trace_agent_phase("planner", f"model_skipped error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task planner skipped: {e}")
         return self._fallback_task_plan(objective), "medium", "", False
@@ -1895,6 +1991,13 @@ class SmartiCore:
 
     def _compact_current_messages_if_needed(self, current_messages, task_state, iteration):
         if not current_messages or not task_state:
+            return
+        if self.settings.get("preserve_current_task_tool_context", True):
+            task_state["compactions_skipped"] = int(task_state.get("compactions_skipped", 0) or 0) + 1
+            logging.info(
+                f"Agent inline context compaction skipped at iteration {iteration}; "
+                "current task tool context is preserved by settings."
+            )
             return
         try:
             compact_after = int(self.settings.get("agent_context_compact_after_loops", 4) or 4)
@@ -2156,7 +2259,8 @@ class SmartiCore:
             max_evals = int(self.settings.get("max_agent_evaluations_per_task", 4) or 4)
         except Exception:
             max_evals = 4
-        if int(task_state.get("evaluations", 0) or 0) >= max(0, max_evals):
+        unlimited_evals = bool(self.settings.get("allow_unlimited_agent_evaluations", True)) or max_evals <= 0
+        if not unlimited_evals and int(task_state.get("evaluations", 0) or 0) >= max(0, max_evals):
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=max_evaluations count={task_state.get('evaluations', 0)}")
             return ""
         meaningful = any(r.get("status") == "error" or self._tool_is_mutating_or_control(r.get("action", ""), r.get("arguments", {}) or {}) for r in results)
@@ -2228,6 +2332,8 @@ class SmartiCore:
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
+            if self._is_budget_exception(e):
+                raise
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task evaluator skipped: {e}")
         return ""
@@ -2235,13 +2341,24 @@ class SmartiCore:
     def _should_run_final_verifier_for_task(self, task_state, final_response, tool_call_counts, iteration):
         if not final_response or str(final_response).startswith("ERROR_USER") or self._is_background_context():
             return False
-        if self._looks_like_internal_artifact(final_response):
+        text = str(final_response).strip()
+        if self._looks_like_internal_artifact(text):
             return True
         if tool_call_counts:
             return True
-        if task_state and task_state.get("planner_enabled") and iteration >= 2:
+        complexity = 0
+        risk = "low"
+        if task_state:
+            try:
+                complexity = int(task_state.get("complexity_score", 0) or 0)
+            except Exception:
+                complexity = 0
+            risk = str(task_state.get("risk", "low") or "low").lower()
+        if task_state and task_state.get("planner_enabled") and (iteration >= 2 or risk in {"medium", "high"} or complexity >= 3):
             return True
-        if len(str(final_response).strip()) >= 220:
+        if len(text) >= 600 and complexity >= 2:
+            return True
+        if len(text) >= 220 and complexity >= 4:
             return True
         return False
 
@@ -3901,6 +4018,123 @@ class SmartiCore:
             with open(USAGE_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
         except Exception as e: logging.error(f"Failed to log usage data: {e}")
 
+    def _is_local_usage_accounting_model(self, model_name):
+        name = str(model_name or "").strip().lower()
+        return name in {"memory-rag/local", "smarti-memory-rag/local"} or name.startswith("memory-rag/")
+
+    def _daily_token_usage(self, date_str=None):
+        date_str = date_str or datetime.now().strftime('%Y-%m-%d')
+        try:
+            if not os.path.exists(USAGE_FILE):
+                return 0
+            with open(USAGE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            models = data.get(date_str, {}) if isinstance(data, dict) else {}
+            total = 0
+            exclude_local = self.settings.get("budgets", {}).get("budget_exclude_local_accounting", True)
+            for model_name, stats in models.items():
+                if exclude_local and self._is_local_usage_accounting_model(model_name):
+                    continue
+                if isinstance(stats, dict):
+                    total += int(stats.get("total", 0) or 0)
+            return max(0, total)
+        except Exception as e:
+            logging.warning(f"Failed to read daily token usage: {e}")
+            return 0
+
+    def _estimate_request_tokens(self, current_messages):
+        text_parts = []
+        if self.mode in {"gemini", "anthropic"} and getattr(self, "system_prompt", ""):
+            text_parts.append(self.system_prompt)
+        for message in current_messages or []:
+            text_parts.append(self._message_text_for_budget(message))
+        return estimate_text_tokens("\n".join(text_parts))
+
+    def _budget_warning_notice(self, used_tokens, estimated_prompt_tokens, budget):
+        if not budget or budget <= 0:
+            return ""
+        budgets = self.settings.get("budgets", {})
+        if not budgets.get("warn_when_budget_exceeded", True):
+            return ""
+        projected = used_tokens + max(0, int(estimated_prompt_tokens or 0))
+        ratio = projected / max(1, budget)
+        thresholds = budgets.get("daily_token_warning_thresholds", [0.7, 0.85, 0.95])
+        try:
+            thresholds = sorted(float(x) for x in thresholds)
+        except Exception:
+            thresholds = [0.7, 0.85, 0.95]
+        active = [t for t in thresholds if ratio >= t]
+        if not active:
+            return ""
+        current = active[-1]
+        next_thresholds = [f"{int(t * 100)}%" for t in thresholds if t > current]
+        remaining = max(0, budget - used_tokens)
+        severity = "soft" if current < 0.85 else ("strong" if current < 0.95 else "critical")
+        next_text = ", ".join(next_thresholds) if next_thresholds else "the hard stop at 100%"
+        return (
+            "[SMARTI_DAILY_TOKEN_BUDGET_WARNING]\n"
+            f"Severity: {severity}. Daily token budget is near its limit: used={used_tokens:,}, "
+            f"estimated_this_request_prompt={estimated_prompt_tokens:,}, budget={budget:,}, remaining_before_request={remaining:,}.\n"
+            f"Current warning threshold: {int(current * 100)}%. Next warning/stop: {next_text}.\n"
+            "Use your judgment to finish efficiently: avoid unnecessary tool calls, prefer concise answers, "
+            "reuse available context, and complete the task now if possible. Code will block further model calls once the daily token budget is exhausted.\n"
+            "[/SMARTI_DAILY_TOKEN_BUDGET_WARNING]"
+        )
+
+    def _messages_with_budget_notice(self, current_messages, notice):
+        if not notice:
+            return current_messages
+        prepared = copy.deepcopy(current_messages or [])
+        if self.mode == "gemini":
+            prepared.append({"role": "user", "parts": [{"text": notice}]})
+            return prepared
+        insert_at = 1 if prepared and prepared[0].get("role") == "system" else 0
+        prepared.insert(insert_at, {"role": "system", "content": notice})
+        return prepared
+
+    def _prepare_messages_for_budget(self, current_model, current_messages):
+        budgets = self.settings.get("budgets", {})
+        try:
+            budget = int(budgets.get("daily_token_budget", 0) or 0)
+        except Exception:
+            budget = 0
+        if budget <= 0:
+            return current_messages
+        used = self._daily_token_usage()
+        estimated = self._estimate_request_tokens(current_messages)
+        if used >= budget:
+            raise Exception(f"DAILY_TOKEN_BUDGET_EXCEEDED: used={used} budget={budget}")
+        if used + estimated > budget:
+            raise Exception(f"DAILY_TOKEN_BUDGET_WOULD_EXCEED: used={used} estimated_prompt={estimated} budget={budget}")
+        notice = self._budget_warning_notice(used, estimated, budget)
+        if notice:
+            self._trace_agent_phase(
+                "budget",
+                f"warning model={current_model} used={used} estimated_prompt={estimated} budget={budget}"
+            )
+        return self._messages_with_budget_notice(current_messages, notice)
+
+    def _is_budget_exception(self, error):
+        return "DAILY_TOKEN_BUDGET" in str(error or "")
+
+    def _budget_exception_user_message(self, error):
+        try:
+            budget = int(self.settings.get("budgets", {}).get("daily_token_budget", 0) or 0)
+        except Exception:
+            budget = 0
+        used = self._daily_token_usage()
+        details = redact_sensitive_text(str(error or ""), self.settings)
+        reset_note = "המכסה מתאפסת אוטומטית בתחילת יום חדש."
+        if "WOULD_EXCEED" in details:
+            return (
+                "ERROR_USER: עצרתי לפני קריאה נוספת למודל, כי היא הייתה עלולה לחרוג ממכסת הטוקנים היומית "
+                f"שהוגדרה. נוצלו כעת כ-{used:,} מתוך {budget:,} טוקנים. {reset_note}"
+            )
+        return (
+            "ERROR_USER: הגעת למכסת הטוקנים היומית שהוגדרה, ולכן עצרתי לפני קריאה נוספת למודל. "
+            f"נוצלו כעת כ-{used:,} מתוך {budget:,} טוקנים. {reset_note}"
+        )
+
     # --- Discovery Engines for Unified Tools ---
     def _get_existing_python_tools(self):
         tools = []
@@ -4039,7 +4273,7 @@ class SmartiCore:
         conversation_summary = self.settings.get("conversation_summary", "").strip() or "אין סיכום שיחה קודם."
         recent_observations = "\n".join(self.recent_tool_observations[-6:]) if getattr(self, "recent_tool_observations", None) else "אין תצפיות כלים אחרונות."
         recent_observations = "\n".join(self.recent_tool_observations[-12:]) if getattr(self, "recent_tool_observations", None) else recent_observations
-        tool_context_transcript = self._tool_context_prompt()
+        tool_context_transcript = self._tool_context_prompt(memory_query)
         tools_config = self.settings.get("tools_config", {})
         
         now = datetime.now()
@@ -4224,13 +4458,14 @@ CWD: {current_dir}
             try:
                 self._raise_if_cancelled()
                 usage_dict = {}
+                request_messages = self._prepare_messages_for_budget(current_model, current_messages)
                 if self.mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
                     base_url = get_url(URL_GEMINI_GEN)
                     url = f"{base_url}{current_model}:generateContent"
                     payload = {
                         "systemInstruction": {"parts": [{"text": self.system_prompt}]},
-                        "contents": current_messages,
+                        "contents": request_messages,
                         "generationConfig": {"temperature": 0.7}
                     }
                     response = self._run_cancelable_callable(
@@ -4261,7 +4496,7 @@ CWD: {current_dir}
                     if not getattr(self, "universal_client", None):
                         raise Exception("OpenAI-compatible client is not available. Install the openai Python package.")
                     response = self._run_cancelable_callable(
-                        lambda: self.universal_client.chat.completions.create(model=current_model, messages=current_messages, temperature=0.7)
+                        lambda: self.universal_client.chat.completions.create(model=current_model, messages=request_messages, temperature=0.7)
                     )
                     if hasattr(response, 'usage') and response.usage:
                         usage_dict = {'prompt': response.usage.prompt_tokens, 'completion': response.usage.completion_tokens, 'total': response.usage.total_tokens}
@@ -4270,9 +4505,9 @@ CWD: {current_dir}
                     api_key = self._ensure_secret_loaded("anthropic_api_key")
                     url = get_url(URL_ANTHROPIC)
                     headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-                    extra_system = "\n\n".join([str(m.get("content", "")) for m in current_messages if m.get("role") == "system" and m.get("content") != self.system_prompt])
+                    extra_system = "\n\n".join([str(m.get("content", "")) for m in request_messages if m.get("role") == "system" and m.get("content") != self.system_prompt])
                     system_text = self.system_prompt + (f"\n\n{extra_system}" if extra_system else "")
-                    payload = {"model": current_model, "system": system_text, "messages": [m for m in current_messages if m["role"] != "system"], "max_tokens": 4096, "temperature": 0.7}
+                    payload = {"model": current_model, "system": system_text, "messages": [m for m in request_messages if m["role"] != "system"], "max_tokens": 4096, "temperature": 0.7}
                     response = self._run_cancelable_callable(
                         lambda: self._request_post(url, json=payload, headers=headers, timeout=120)
                     )
@@ -4288,6 +4523,8 @@ CWD: {current_dir}
             except requests.exceptions.SSLError as e:
                 raise Exception(self._friendly_ssl_error(e))
             except Exception as e:
+                if self._is_budget_exception(e):
+                    raise
                 err_str = str(e).lower()
                 if any(k in err_str for k in ["overload", "429", "rate limit", "503", "500", "502", "504", "too many requests"]):
                     if retries < max_retries:
@@ -4373,8 +4610,11 @@ CWD: {current_dir}
         lock_acquired = self._agent_lock.acquire(blocking=False)
         if not lock_acquired:
             return "ERROR_USER: סמארטי כבר מבצע משימה אחרת. נסה שוב בעוד רגע או בטל את הפעולה הפעילה."
+        missing_context_value = object()
         previous_background_flag = getattr(self._execution_context, "is_background", False)
         previous_policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
+        previous_task_id = getattr(self._execution_context, "current_task_id", missing_context_value)
+        previous_task_objective = getattr(self._execution_context, "current_task_objective", missing_context_value)
         run_cancel_event = threading.Event()
         iteration = 0
         final_response = ""
@@ -4382,6 +4622,8 @@ CWD: {current_dir}
         task_state = None
         try:
             self._execution_context.is_background = is_background_task
+            self._execution_context.current_task_id = uuid.uuid4().hex[:12]
+            self._execution_context.current_task_objective = str(user_text or "")[:700]
             if not is_background_task:
                 self._foreground_cancel_event = run_cancel_event
                 self.cancel_event = run_cancel_event
@@ -4445,6 +4687,8 @@ CWD: {current_dir}
                         final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
+                    elif self._is_budget_exception(e):
+                        final_response = self._budget_exception_user_message(e)
                     elif "RATE_LIMIT_ABORTED" in str(e):
                         final_response = "ERROR_USER: שרתי ה-AI עמוסים מידי או שחרגת ממגבלת הקצב."
                     else:
@@ -4672,6 +4916,9 @@ CWD: {current_dir}
             final_response = "הפעולה נעצרה לבקשת המשתמש."
             return final_response
         except Exception as e:
+            if self._is_budget_exception(e):
+                final_response = self._budget_exception_user_message(e)
+                return final_response
             logging.exception("Agent loop crashed unexpectedly inside send_message.")
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
             return final_response
@@ -4688,6 +4935,20 @@ CWD: {current_dir}
                 delattr(self._execution_context, "loop_iteration")
             except Exception:
                 pass
+            if previous_task_id is missing_context_value:
+                try:
+                    delattr(self._execution_context, "current_task_id")
+                except Exception:
+                    pass
+            else:
+                self._execution_context.current_task_id = previous_task_id
+            if previous_task_objective is missing_context_value:
+                try:
+                    delattr(self._execution_context, "current_task_objective")
+                except Exception:
+                    pass
+            else:
+                self._execution_context.current_task_objective = previous_task_objective
             if previous_policy_snapshot is None:
                 try:
                     delattr(self._execution_context, "policy_snapshot")
@@ -4711,6 +4972,15 @@ CWD: {current_dir}
         ok, err = self._ensure_automation_browser()
         if not ok: return err
         timeout = self._timeout("tool_timeout_seconds", 120)
+        def _bounded_int_setting(name, default, minimum, maximum):
+            try:
+                value = int(self.settings.get(name, default) or default)
+            except Exception:
+                value = default
+            return max(minimum, min(maximum, value))
+        snapshot_limit = _bounded_int_setting("browser_snapshot_element_limit", 80, 20, 200)
+        snapshot_body_chars = _bounded_int_setting("browser_snapshot_body_chars", 4000, 1000, 12000)
+        snapshot_html_chars = _bounded_int_setting("browser_snapshot_html_chars", 500, 0, 1200)
         helper_code = r'''
 import sys, os, io, re, time, json
 sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
@@ -4751,14 +5021,20 @@ try:
             else:
                 setattr(driver, name, lambda value, by=by: driver.find_element(by, value))
 
+    SMARTI_DEFAULT_ELEMENT_LIMIT = __SMARTI_DEFAULT_ELEMENT_LIMIT__
+    SMARTI_DEFAULT_BODY_CHARS = __SMARTI_DEFAULT_BODY_CHARS__
+    SMARTI_DEFAULT_HTML_CHARS = __SMARTI_DEFAULT_HTML_CHARS__
+
     def _short(value, limit=400):
         text = "" if value is None else str(value)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:limit] + ("..." if len(text) > limit else "")
 
-    def collect_elements(limit=120):
+    def collect_elements(limit=None):
+        limit = int(limit or SMARTI_DEFAULT_ELEMENT_LIMIT)
         script = r"""
-const limit = arguments[0] || 120;
+const limit = arguments[0] || 80;
+const htmlLimit = arguments[1] || 500;
 function textOf(el) {
   return (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("placeholder") || "").replace(/\s+/g, " ").trim();
 }
@@ -4798,13 +5074,13 @@ return nodes.filter(visible).slice(0, limit).map((el, index) => {
     checked: !!el.checked,
     disabled: !!el.disabled,
     rect: {x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height)},
-    html: (el.outerHTML || "").slice(0, 900)
+    html: (el.outerHTML || "").slice(0, htmlLimit)
   };
 });
 """
-        return driver.execute_script(script, int(limit or 120))
+        return driver.execute_script(script, limit, int(SMARTI_DEFAULT_HTML_CHARS))
 
-    def get_page_state(limit=120):
+    def get_page_state(limit=None):
         body_text = ""
         try:
             body_text = driver.execute_script("return document.body ? document.body.innerText : '';") or ""
@@ -4814,11 +5090,11 @@ return nodes.filter(visible).slice(0, limit).map((el, index) => {
             "url": driver.current_url,
             "title": driver.title,
             "readyState": driver.execute_script("return document.readyState"),
-            "bodyText": _short(body_text, 6000),
+            "bodyText": _short(body_text, SMARTI_DEFAULT_BODY_CHARS),
             "elements": collect_elements(limit),
         }
 
-    def print_page_state(limit=120):
+    def print_page_state(limit=None):
         print("SMARTI_PAGE_STATE:")
         print(json.dumps(get_page_state(limit), ensure_ascii=False, indent=2))
 
@@ -4849,11 +5125,11 @@ return nodes.filter(visible).slice(0, limit).map((el, index) => {
             by_value = kwargs.get("by") or kwargs.get("By") or By
             target = kwargs.get("value") if "value" in kwargs else value
             return self.driver.find_elements(self._normalize_by(by_value), target)
-        def elements(self, limit=120):
+        def elements(self, limit=None):
             return collect_elements(limit)
-        def state(self, limit=120):
+        def state(self, limit=None):
             return get_page_state(limit)
-        def print_state(self, limit=120):
+        def print_state(self, limit=None):
             return print_page_state(limit)
 
     def set_clipboard(text):
@@ -4898,7 +5174,7 @@ finally:
                 driver.service.stop()
         except Exception:
             pass
-'''.replace("__SMARTI_PORT__", str(SMARTI_BROWSER_DEBUG_PORT))
+'''.replace("__SMARTI_PORT__", str(SMARTI_BROWSER_DEBUG_PORT)).replace("__SMARTI_DEFAULT_ELEMENT_LIMIT__", str(snapshot_limit)).replace("__SMARTI_DEFAULT_BODY_CHARS__", str(snapshot_body_chars)).replace("__SMARTI_DEFAULT_HTML_CHARS__", str(snapshot_html_chars))
         helper_path = None
         try:
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".py", delete=False) as fp:
@@ -7927,11 +8203,20 @@ if __name__ == "__main__":
                 uid_set = [str(args.get("uid")).strip()] if args.get("uid") else [str(u).strip() for u in (args.get("uids") or []) if str(u).strip()]
                 if not uid_set:
                     raise ValueError("read requires uid or uids.")
-                max_body_chars = int(args.get("max_body_chars") or 8000)
+                try:
+                    default_body_chars = max(1200, int(self.settings.get("email_default_read_body_chars", 6000) or 6000))
+                except Exception:
+                    default_body_chars = 6000
+                try:
+                    multi_body_chars = max(800, int(self.settings.get("email_multi_read_body_chars", 3000) or 3000))
+                except Exception:
+                    multi_body_chars = 3000
+                max_body_chars = int(args.get("max_body_chars") or (multi_body_chars if len(uid_set) > 1 else default_body_chars))
+                include_headers = bool(args.get("include_headers", len(uid_set) == 1))
                 records = []
                 for uid in uid_set:
                     msg, meta = self._email_fetch_message(mail, uid)
-                    rec = self._email_record_from_message(uid, msg, meta, include_body=bool(args.get("include_body", True)), include_headers=bool(args.get("include_headers", True)), include_attachments=bool(args.get("include_attachments", True)), max_body_chars=max_body_chars)
+                    rec = self._email_record_from_message(uid, msg, meta, include_body=bool(args.get("include_body", True)), include_headers=include_headers, include_attachments=bool(args.get("include_attachments", True)), max_body_chars=max_body_chars)
                     rec["mailbox"] = mailbox
                     records.append(rec)
                 return self._email_tool_output({"status": "ok", "mailbox": mailbox, "messages": records})
