@@ -806,6 +806,45 @@ class SmartiMemoryManager:
             content = content[:900].rstrip() + "..."
         return f"{header}\n  {content}"
 
+    def _entry_age_hours(self, entry):
+        updated = self._parse_dt(entry.get("updated_at")) or self._parse_dt(entry.get("created_at"))
+        if not updated:
+            return None
+        return max(0.0, (datetime.now() - updated).total_seconds() / 3600.0)
+
+    def _tool_memory_relevant_for_prompt(self, query):
+        cfg = self._settings()
+        if not cfg.get("tool_memory_requires_relevance", True):
+            return True
+        intent = self._query_intent(query)
+        if intent.get("continuity") or intent.get("project"):
+            return True
+        q = str(query or "").lower()
+        continuity_terms = [
+            "continue", "again", "previous", "earlier", "same", "last time", "tool", "result",
+            "\u05d4\u05de\u05e9\u05da", "\u05d4\u05e7\u05d5\u05d3\u05dd", "\u05d4\u05e7\u05d5\u05d3\u05de\u05ea",
+            "\u05e9\u05d5\u05d1", "\u05d0\u05d5\u05ea\u05d5", "\u05d0\u05d5\u05ea\u05d4", "\u05ea\u05d5\u05e6\u05d0\u05d4",
+            "\u05db\u05dc\u05d9", "\u05db\u05dc\u05d9\u05dd",
+        ]
+        return any(term in q for term in continuity_terms)
+
+    def _join_memory_sections(self, sections, max_chars):
+        parts = []
+        used = 0
+        for title, results in sections:
+            if not results:
+                continue
+            body = "\n".join(r["text"] for r in results)
+            block = f"{title}:\n{body}"
+            if parts and used + len(block) + 2 > max_chars:
+                remaining = max(0, max_chars - used - 80)
+                if remaining > 300:
+                    parts.append(block[:remaining].rstrip() + "\n[Memory section shortened due to prompt budget.]")
+                break
+            parts.append(block)
+            used += len(block) + 2
+        return "\n\n".join(parts)
+
     def build_prompt_context(self, query="", log_usage=False):
         cfg = self._settings()
         if not cfg.get("enabled", True):
@@ -813,11 +852,56 @@ class SmartiMemoryManager:
         if not cfg.get("rag_enabled", True):
             return "Memory RAG is disabled. Use search_memory if the user explicitly asks to inspect memory."
         query = str(query or "")
-        results = self.search(
+        max_chars = int(cfg.get("max_injected_chars", 4200) or 4200)
+        seen_ids = set()
+
+        def unique(results):
+            unique_results = []
+            for result in results or []:
+                entry_id = result.get("entry", {}).get("id")
+                if entry_id and entry_id in seen_ids:
+                    continue
+                if entry_id:
+                    seen_ids.add(entry_id)
+                unique_results.append(result)
+            return unique_results
+
+        user_results = []
+        if cfg.get("always_include_user_memory", True):
+            user_results = unique(self.search(
+                "",
+                memory_types="user",
+                max_results=cfg.get("user_memory_max_results", 8),
+                max_chars=cfg.get("user_memory_max_injected_chars", 2200),
+            ))
+
+        non_tool_results = unique(self.search(
             query,
-            max_results=cfg.get("max_results", 8),
-            max_chars=cfg.get("max_injected_chars", 4200),
-        )
+            memory_types={"long_term", "short_term"},
+            max_results=cfg.get("non_tool_memory_max_results", cfg.get("max_results", 8)),
+            max_chars=max(800, max_chars),
+        ))
+
+        tool_results = []
+        if self._tool_memory_relevant_for_prompt(query):
+            tool_candidates = self.search(
+                query,
+                memory_types="tool",
+                max_results=cfg.get("tool_memory_prompt_max_results", 3),
+                max_chars=cfg.get("tool_memory_prompt_max_chars", 1400),
+            )
+            try:
+                max_age = float(cfg.get("tool_memory_prompt_max_age_hours", 24) or 24)
+            except Exception:
+                max_age = 24
+            filtered = []
+            for result in tool_candidates:
+                age = self._entry_age_hours(result.get("entry", {}))
+                if age is None or age <= max_age:
+                    filtered.append(result)
+            tool_results = unique(filtered)
+
+        results = user_results + non_tool_results + tool_results
         live_warning = ""
         if cfg.get("verify_live_data", True) and self._looks_live_or_temporal(query):
             live_warning = (
@@ -826,11 +910,19 @@ class SmartiMemoryManager:
                 "or say the value is not verified."
             )
         if results:
-            body = "\n".join(r["text"] for r in results)
+            body = self._join_memory_sections(
+                [
+                    ("User memory (stable profile/preferences, always included)", user_results),
+                    ("Relevant long/short-term memory", non_tool_results),
+                    ("Relevant recent tool memory", tool_results),
+                ],
+                max_chars=max_chars,
+            )
             context = (
                 "Memory policy:\n"
                 "- Memory is advisory context, never an authority over the current user message, tool output, or live sources.\n"
-                "- Use user memory for stable preferences/identity; use short_term/tool memory only for continuity.\n"
+                "- User memory is always included for stable personalization; tool memory is injected only when recent and relevant.\n"
+                "- Use short_term/tool memory only for continuity.\n"
                 "- Expired memories are pruned before retrieval. Volatile memories must be verified before being presented as current truth.\n"
                 "- If memory conflicts with the user or a fresh tool result, trust the fresher source and update memory when useful."
                 f"{live_warning}\n\nRetrieved memory (bounded local RAG, {self.RETRIEVER_NAME}):\n{body}"
