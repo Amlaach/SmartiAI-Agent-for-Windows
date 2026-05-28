@@ -798,7 +798,7 @@ DEFAULT_SETTINGS = {
     "email_archive_mailbox": "",
     "email_trash_mailbox": "",
     "email_max_attachment_mb": 20,
-    "selected_gemini_model": "gemini-3.1-flash-lite-preview",
+    "selected_gemini_model": "gemini-3.1-flash-lite",
     "selected_openai_model": "gpt-5.4",
     "selected_anthropic_model": "claude-opus-4-7",
     "selected_local_model": "",
