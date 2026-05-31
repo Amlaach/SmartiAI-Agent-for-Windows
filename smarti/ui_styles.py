@@ -159,6 +159,7 @@ def _svg_asset(filename, svg_text):
 
 def themed_asset_candidates(*names):
     candidates = []
+    alternate_theme = "light" if CURRENT_THEME == "dark" else "dark"
     for name in names:
         raw = str(name or "").strip()
         if not raw:
@@ -170,11 +171,14 @@ def themed_asset_candidates(*names):
         if ext:
             candidates.append(f"{stem}_{CURRENT_THEME}{ext}")
             candidates.append(raw)
+            candidates.append(f"{stem}_{alternate_theme}{ext}")
         else:
             for suffix in (".png", ".svg"):
                 candidates.append(f"{raw}_{CURRENT_THEME}{suffix}")
             for suffix in (".png", ".svg"):
                 candidates.append(f"{raw}{suffix}")
+            for suffix in (".png", ".svg"):
+                candidates.append(f"{raw}_{alternate_theme}{suffix}")
     return list(dict.fromkeys(candidates))
 
 
