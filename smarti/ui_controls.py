@@ -86,6 +86,7 @@ class MaskedSecretLineEdit(QLineEdit):
         self._secret_value = sanitize_secret_value(value)
         self._editing_secret = False
         previous = self.blockSignals(True)
+        self.setEchoMode(QLineEdit.EchoMode.Normal)
         super().setText(mask_secret_value(self._secret_value))
         self.blockSignals(previous)
         self.setModified(False)
@@ -100,9 +101,17 @@ class MaskedSecretLineEdit(QLineEdit):
 
     def _on_text_edited(self, text):
         self._editing_secret = True
-        self.secretEdited.emit(sanitize_secret_value(text))
+        cleaned = sanitize_secret_value(text)
+        if cleaned != str(text or ""):
+            cursor = min(self.cursorPosition(), len(cleaned))
+            previous = self.blockSignals(True)
+            super().setText(cleaned)
+            self.setCursorPosition(cursor)
+            self.blockSignals(previous)
+        self.secretEdited.emit(cleaned)
 
     def focusInEvent(self, event):
+        self.setEchoMode(QLineEdit.EchoMode.Password)
         if not self._editing_secret and self._secret_value:
             tail = self._secret_value[-4:]
             previous = self.blockSignals(True)
@@ -116,6 +125,8 @@ class MaskedSecretLineEdit(QLineEdit):
             self.set_secret(self._secret_value)
         elif not self._editing_secret:
             self.set_secret(self._secret_value)
+        else:
+            self.setEchoMode(QLineEdit.EchoMode.Password)
         super().focusOutEvent(event)
 
 class SegmentedControl(QWidget):

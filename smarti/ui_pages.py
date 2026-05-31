@@ -153,8 +153,7 @@ class ApiKeyRequiredDialog(QDialog):
         provider_hint.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 700;")
         layout.addWidget(provider_hint)
 
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("הדבק כאן את מפתח ה-API")
         self.api_key_edit.setClearButtonEnabled(True)
         layout.addWidget(self.api_key_edit)
@@ -165,6 +164,13 @@ class ApiKeyRequiredDialog(QDialog):
             link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
             link.setStyleSheet(f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}")
             layout.addWidget(link)
+
+        instructions = provider_key_instructions(secret_key=secret_key)
+        if instructions:
+            help_text = QLabel(instructions)
+            help_text.setWordWrap(True)
+            help_text.setStyleSheet(muted_label_css(12))
+            layout.addWidget(help_text)
 
         note = QLabel("המפתח יישמר כמו שאר המפתחות של סמארטי, ולא יוצג בלוגים.")
         note.setWordWrap(True)
@@ -177,13 +183,13 @@ class ApiKeyRequiredDialog(QDialog):
         ok_btn.setText("שמירה והמשך")
         ok_btn.setEnabled(False)
         cancel_btn.setText("ביטול")
-        self.api_key_edit.textChanged.connect(lambda text: ok_btn.setEnabled(bool(str(text).strip())))
+        self.api_key_edit.secretEdited.connect(lambda text: ok_btn.setEnabled(bool(sanitize_secret_value(text))))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
     def api_key(self):
-        return sanitize_secret_value(self.api_key_edit.text())
+        return sanitize_secret_value(self.api_key_edit.secret())
 
 class UsageStatsPage(QWidget):
     def __init__(self, core, main_window):
@@ -738,25 +744,75 @@ class SettingsPage(QWidget):
     def handle_back(self):
         if hasattr(self, "settings_stack") and self.settings_stack.currentWidget() is not self.settings_home_page:
             self.settings_stack.setCurrentWidget(self.settings_home_page)
+            self._reset_scrolls_in_widget(self.settings_home_page)
         else:
             self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)
 
     def show_home(self):
         if hasattr(self, "settings_stack") and hasattr(self, "settings_home_page"):
             self.settings_stack.setCurrentWidget(self.settings_home_page)
+            self._reset_scrolls_in_widget(self.settings_home_page)
 
     def _set_settings_section(self, target_page):
         if not hasattr(self, "settings_stack") or target_page is None:
             return
         self.settings_stack.setCurrentWidget(target_page)
+        self._reset_scrolls_in_widget(target_page)
         if target_page is getattr(self, "developer_page", None):
             QTimer.singleShot(0, self.load_developer_logs)
+
+    def _reset_scrolls_in_widget(self, widget):
+        if widget is None:
+            return
+
+        def reset():
+            for area in widget.findChildren(QScrollArea):
+                area.verticalScrollBar().setValue(area.verticalScrollBar().minimum())
+                area.horizontalScrollBar().setValue(area.horizontalScrollBar().minimum())
+
+        QTimer.singleShot(0, reset)
 
     def _on_settings_section_changed(self, index):
         if not hasattr(self, "settings_stack"):
             return
+        self._reset_scrolls_in_widget(self.settings_stack.widget(index))
         if self.settings_stack.widget(index) is getattr(self, "developer_page", None):
             QTimer.singleShot(0, self.load_developer_logs)
+
+    def _make_secret_link_row(self, edit, link_label):
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        edit.setStyleSheet(LINE_EDIT_CSS)
+        edit.setMinimumWidth(0)
+        edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        link_label.setTextFormat(Qt.TextFormat.RichText)
+        link_label.setOpenExternalLinks(True)
+        link_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        link_label.setStyleSheet(
+            f"QLabel {{ background: transparent; color: {ACCENT_COLOR}; font-size: 12px; font-weight: 800; }}"
+            f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}"
+        )
+        layout.addWidget(edit, 1)
+        layout.addWidget(link_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def _set_external_link(self, label, url, text):
+        label.setText(f'<a href="{html.escape(str(url or ""), quote=True)}">{html.escape(str(text or ""))}</a>' if url else "")
+        label.setVisible(bool(url))
+
+    def _update_provider_key_help(self):
+        if not hasattr(self, "api_key_help_link"):
+            return
+        provider = normalize_provider_name(self.provider_combo.currentText()) if hasattr(self, "provider_combo") else ""
+        url = provider_help_url(provider)
+        self._set_external_link(self.api_key_help_link, url, "קבל מפתח")
+        instructions = provider_key_instructions(provider)
+        self.api_key_help_hint.setText(instructions)
+        self.api_key_help_hint.setVisible(bool(instructions and provider != "local"))
 
     def _init_widgets(self):
         self.core.ensure_provider_secret(self.core.settings.get("api_mode", "gemini"))
@@ -774,10 +830,22 @@ class SettingsPage(QWidget):
         
         self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
+        self.api_key_help_link = QLabel()
+        self.api_key_row = self._make_secret_link_row(self.api_key_edit, self.api_key_help_link)
         self.api_key_status = QLabel("")
         self.api_key_status.setWordWrap(True)
         self.api_key_status.setStyleSheet(muted_label_css(12))
+        self.api_key_help_hint = QLabel("")
+        self.api_key_help_hint.setWordWrap(True)
+        self.api_key_help_hint.setStyleSheet(muted_label_css(12))
         self.tavily_key = MaskedSecretLineEdit(self.core.settings.get("tavily_api_key", ""))
+        self.tavily_key_help_link = QLabel()
+        self.tavily_key_row = self._make_secret_link_row(self.tavily_key, self.tavily_key_help_link)
+        self.tavily_key_help_hint = QLabel(provider_key_instructions(secret_key="tavily_api_key"))
+        self.tavily_key_help_hint.setWordWrap(True)
+        self.tavily_key_help_hint.setStyleSheet(muted_label_css(12))
+        self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
+        self._update_provider_key_help()
         self.local_url = QLineEdit(self.core.settings.get("local_server_url", "http://localhost:1234/v1"))
         
         self.permission_combo = SegmentedControl()
@@ -1061,11 +1129,13 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(ai, "מודלי AI")
         self._add_field("ספק המודל", self.provider_combo, ai, "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.")
-        self._add_field("מפתח גישה לספק המודל", self.api_key_edit, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
+        self._add_field("מפתח גישה לספק המודל", self.api_key_row, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
         ai.addWidget(self.api_key_status)
+        ai.addWidget(self.api_key_help_hint)
         self._add_field("מודל", self.model_combo, ai, "בחר את המודל שיריץ את סמארטי. מודל חזק יותר בדרך כלל מדויק יותר, אך עשוי לעלות יותר.")
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי רק כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.")
-        self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
+        self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
+        ai.addWidget(self.tavily_key_help_hint)
         ai.addStretch()
 
         self._add_internal_back(safety, "אבטחה והרשאות")
@@ -1189,16 +1259,21 @@ class SettingsPage(QWidget):
 
     def on_provider_change(self, text):
         text = normalize_provider_name(text)
+        self._update_provider_key_help()
         if text == "local":
             self.api_key_edit.set_secret("")
             self.api_key_edit.setPlaceholderText("לא נדרש מפתח למודל מקומי")
             self.api_key_edit.setEnabled(False)
+            self.api_key_help_link.setVisible(False)
+            self.api_key_help_hint.setVisible(False)
             self.api_key_status.setText("")
         else:
             self.core.ensure_provider_secret(text)
             secret_key = provider_secret_key(text)
             saved_key = self.core.settings.get(secret_key, "") if secret_key else ""
             self.api_key_edit.setEnabled(True)
+            self.api_key_help_link.setVisible(bool(provider_help_url(text)))
+            self.api_key_help_hint.setVisible(bool(provider_key_instructions(text)))
             self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
             self.api_key_edit.set_secret(saved_key)
             self._validated_api_keys.add((text, sanitize_secret_value(saved_key)))
@@ -1708,7 +1783,7 @@ class AboutPage(QWidget):
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(16, 16, 16, 16)
         
         top_bar = QHBoxLayout()
         top_bar.addWidget(create_back_button(lambda: self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)))
@@ -1732,21 +1807,21 @@ class AboutPage(QWidget):
 
         hero = QFrame()
         hero.setStyleSheet(card_css(18, 8))
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(18, 16, 18, 16)
-        hero_layout.setSpacing(18)
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(16, 14, 16, 16)
+        hero_layout.setSpacing(10)
 
         logo_lbl = QLabel()
-        logo_lbl.setFixedSize(176, 164)
+        logo_lbl.setFixedSize(184, 184)
         logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_lbl.setStyleSheet("border: none; background: transparent;")
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(logo_path):
             pixmap = QPixmap(logo_path)
             if not pixmap.isNull():
-                canvas = QPixmap(176, 164)
+                canvas = QPixmap(184, 184)
                 canvas.fill(Qt.GlobalColor.transparent)
-                scaled_logo = pixmap.scaled(160, 148, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                scaled_logo = pixmap.scaled(146, 146, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 painter = QPainter(canvas)
                 painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                 painter.drawPixmap((canvas.width() - scaled_logo.width()) // 2, (canvas.height() - scaled_logo.height()) // 2, scaled_logo)
@@ -1760,9 +1835,11 @@ class AboutPage(QWidget):
         hero_text = QVBoxLayout()
         hero_text.setSpacing(7)
         app_name = QLabel("Smarti AI Agent for Windows")
-        app_name.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 22px; font-weight: 800; border: none;")
+        app_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        app_name.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 20px; font-weight: 800; border: none;")
         app_name.setWordWrap(True)
         tagline = QLabel("סוכן עבודה אישי ל-Windows שמבין משימות, מפעיל כלים מקומיים, עובד עם קבצים, אינטרנט, דפדפן, אימייל ומשימות רקע, ומסכם תוצאות בעברית.")
+        tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tagline.setStyleSheet(muted_label_css(13) + " border: none;")
         tagline.setWordWrap(True)
         version = QLabel(f"גרסה {APP_VERSION}")
@@ -1773,11 +1850,10 @@ class AboutPage(QWidget):
         version.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         hero_text.addWidget(app_name)
         hero_text.addWidget(tagline)
-        hero_text.addWidget(version, 0, Qt.AlignmentFlag.AlignRight)
-        hero_text.addStretch()
+        hero_text.addWidget(version, 0, Qt.AlignmentFlag.AlignCenter)
 
-        hero_layout.addWidget(logo_lbl, 0, Qt.AlignmentFlag.AlignTop)
-        hero_layout.addLayout(hero_text, 1)
+        hero_layout.addWidget(logo_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+        hero_layout.addLayout(hero_text)
         content_layout.addWidget(hero)
 
         overview = QLabel(
@@ -1787,9 +1863,11 @@ class AboutPage(QWidget):
         overview.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; line-height: 1.5;")
         content_layout.addWidget(overview)
 
-        github_btn = QPushButton("GitHub: menachem-dadon/SmartiAI-Agent-for-Windows")
+        github_btn = QPushButton("פתח את מאגר GitHub")
         github_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         github_btn.setToolTip("פתיחת מאגר הפרויקט ב-GitHub")
+        github_btn.setMinimumWidth(0)
+        github_btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         github_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
             "border-radius: 18px; padding: 11px 14px; font-size: 13px; font-weight: 800; text-align: center; }}"
@@ -1800,7 +1878,7 @@ class AboutPage(QWidget):
         content_layout.addWidget(github_btn)
 
         content_layout.addWidget(self._section_title("יכולות מרכזיות"))
-        features = QGridLayout()
+        features = QVBoxLayout()
         features.setSpacing(10)
         feature_items = [
             ("קבצים ומסמכים", "חיפוש, קריאה, סיכום, יצירת קבצי טקסט, OCR ותיקיות עבודה."),
@@ -1810,8 +1888,8 @@ class AboutPage(QWidget):
             ("זיכרון שימושי", "שמירת העדפות ופרטי הקשר שחוזרים על עצמם כדי לעבוד מהר יותר."),
             ("שליטה במחשב", "פתיחת תוכנות, עבודה עם חלונות ופעולות UI כשמאשרים זאת בהגדרות."),
         ]
-        for index, (heading, body) in enumerate(feature_items):
-            features.addWidget(self._feature_card(heading, body), index // 2, index % 2)
+        for heading, body in feature_items:
+            features.addWidget(self._feature_card(heading, body))
         content_layout.addLayout(features)
 
         content_layout.addWidget(self._section_title("דוגמאות יומיומיות"))

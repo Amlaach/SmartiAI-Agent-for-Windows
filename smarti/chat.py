@@ -54,7 +54,14 @@ def _repair_markdown_links(text):
         return f"[{label or href}]({href})"
     return re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
 
-def _sanitize_rendered_links(rendered_html):
+def _sanitize_rendered_links(rendered_html, link_color=None):
+    style = ""
+    if link_color:
+        style = (
+            f' style="color: {html.escape(str(link_color), quote=True)}; '
+            'text-decoration: underline; font-weight: 800;"'
+        )
+
     def repl(match):
         quote = match.group(1)
         href = _normalize_href(match.group(2))
@@ -62,7 +69,7 @@ def _sanitize_rendered_links(rendered_html):
         if not _is_valid_display_href(href):
             return inner
         display_inner = inner.strip() or html.escape(href)
-        return f'<a href={quote}{html.escape(href, quote=True)}{quote}>{display_inner}</a>'
+        return f'<a href={quote}{html.escape(href, quote=True)}{quote}{style}>{display_inner}</a>'
     rendered_html = re.sub(r'<a\s+[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', repl, str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
     rendered_html = re.sub(r'<a\s+[^>]*href\s*=\s*[^>]*>\s*</a>', '', rendered_html, flags=re.IGNORECASE | re.DOTALL)
     return rendered_html
@@ -184,6 +191,11 @@ class MessageBubble(QFrame):
         else: self.final_label.hide()
         self.apply_theme()
 
+    def _link_color(self):
+        if self.is_user:
+            return BUBBLE_USER_TEXT
+        return "#FFF2A8" if CURRENT_THEME == "dark" else "#004E66"
+
     def apply_theme(self):
         bg = (
             USER_BUBBLE_COLOR
@@ -191,7 +203,7 @@ class MessageBubble(QFrame):
             else f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {BUBBLE_AGENT_END})"
         )
         color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
-        link_color = BUBBLE_USER_TEXT if self.is_user else (ACCENT_WARM_COLOR if CURRENT_THEME == "dark" else ACCENT_COLOR)
+        link_color = self._link_color()
         radius = "24px"
         border = f"1px solid {USER_BUBBLE_BORDER if self.is_user else SOFT_LINE_COLOR}"
 
@@ -256,7 +268,7 @@ class MessageBubble(QFrame):
                 rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
         else:
             rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
-        rendered_html = _sanitize_rendered_links(rendered_html)
+        rendered_html = _sanitize_rendered_links(rendered_html, self._link_color())
         if not rendered_html.lstrip().startswith("<"):
             rendered_html = f"<span>{rendered_html}</span>"
         self.final_label.setText(rendered_html)
@@ -371,13 +383,14 @@ class ChatMessageContainer(QWidget):
             actions_layout.addWidget(self.tts_btn)
 
         self.actions_opacity = QGraphicsOpacityEffect(self.actions_container)
-        self.actions_opacity.setOpacity(1.0)
+        self.actions_opacity.setOpacity(0.0 if self.show_actions else 1.0)
         self.actions_container.setGraphicsEffect(self.actions_opacity)
         layout.addWidget(self.actions_container)
 
         self.opacity_anim = QPropertyAnimation(self.actions_opacity, b"opacity", self)
         self.opacity_anim.setDuration(240)
         self.opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._actions_can_show = not self.show_actions
         self._entry_started = False
         self._entry_pending = False
         self._enter_opacity = None
@@ -431,6 +444,9 @@ class ChatMessageContainer(QWidget):
         if self._entry_started or not self.isVisible():
             return
         self._entry_started = True
+        if self.show_actions:
+            self._actions_can_show = False
+            self.actions_opacity.setOpacity(0.0)
 
         self._enter_opacity = QGraphicsOpacityEffect(self.content_wrap)
         self._enter_opacity.setOpacity(0.0)
@@ -454,6 +470,9 @@ class ChatMessageContainer(QWidget):
         def cleanup():
             self.content_wrap.move(end_pos)
             self.content_wrap.setGraphicsEffect(None)
+            self._actions_can_show = True
+            if self.show_actions:
+                self.actions_opacity.setOpacity(1.0)
             self.updateGeometry()
 
         self._enter_anim.finished.connect(cleanup)
@@ -476,8 +495,10 @@ class ChatMessageContainer(QWidget):
         super().leaveEvent(event)
 
     def _set_actions_visible(self, visible):
+        if not self.show_actions:
+            return
         self.opacity_anim.stop()
-        self.actions_opacity.setOpacity(1.0)
+        self.actions_opacity.setOpacity(1.0 if self._actions_can_show else 0.0)
 
     def copy_message_text(self):
         if not self.copy_btn:
@@ -956,12 +977,26 @@ class ChatWindow(QMainWindow):
         main_layout.addWidget(self.chat_body, 1)
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
+    def _reset_page_scrolls(self, page):
+        if page is None:
+            return
+
+        def reset():
+            for area in page.findChildren(QScrollArea):
+                if area is self.scroll:
+                    continue
+                area.verticalScrollBar().setValue(area.verticalScrollBar().minimum())
+                area.horizontalScrollBar().setValue(area.horizontalScrollBar().minimum())
+
+        QTimer.singleShot(0, reset)
+
     def show_usage_page(self):
         if self.usage_page is None:
             self.usage_page = UsageStatsPage(self.core, self)
             self.stacked_widget.addWidget(self.usage_page)
         self.usage_page.load_data('today')
         self.stacked_widget.setCurrentWidget(self.usage_page)
+        self._reset_page_scrolls(self.usage_page)
 
     def show_settings_page(self):
         if self.settings_page is None:
@@ -970,6 +1005,7 @@ class ChatWindow(QMainWindow):
         self.settings_page.show_home()
         self.settings_page.ensure_models_loaded()
         self.stacked_widget.setCurrentWidget(self.settings_page)
+        self._reset_page_scrolls(self.settings_page)
 
     def rebuild_settings_page(self):
         if self.settings_page is not None:
@@ -985,6 +1021,7 @@ class ChatWindow(QMainWindow):
         self.tools_page = ToolsSettingsPage(self.core, self)
         self.stacked_widget.addWidget(self.tools_page)
         self.stacked_widget.setCurrentWidget(self.tools_page)
+        self._reset_page_scrolls(self.tools_page)
 
     def show_task_center_page(self):
         if self.task_center_page is None:
@@ -992,6 +1029,7 @@ class ChatWindow(QMainWindow):
             self.stacked_widget.addWidget(self.task_center_page)
         self.task_center_page.load_tasks()
         self.stacked_widget.setCurrentWidget(self.task_center_page)
+        self._reset_page_scrolls(self.task_center_page)
 
     def show_trace_page(self):
         if self.trace_page is None:
@@ -999,12 +1037,14 @@ class ChatWindow(QMainWindow):
             self.stacked_widget.addWidget(self.trace_page)
         self.trace_page.load_trace()
         self.stacked_widget.setCurrentWidget(self.trace_page)
+        self._reset_page_scrolls(self.trace_page)
 
     def show_about_page(self):
         if self.about_page is None:
             self.about_page = AboutPage(self)
             self.stacked_widget.addWidget(self.about_page)
         self.stacked_widget.setCurrentWidget(self.about_page)
+        self._reset_page_scrolls(self.about_page)
 
     def bring_to_front(self):
         if hasattr(self, "quick_reply_toast"):

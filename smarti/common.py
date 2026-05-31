@@ -95,7 +95,8 @@ MODEL_PROVIDER_CONFIGS = {
         "label": "Google Gemini",
         "kind": "gemini",
         "secret_key": "gemini_api_key",
-        "help_url": "https://aistudio.google.com/app/apikey",
+        "help_url": "https://aistudio.google.com/apikey",
+        "key_instructions": "התחבר ל-Google AI Studio, לחץ Create API key, בחר או צור פרויקט והעתק את המפתח.",
         "default_model": "gemini-3.1-flash-lite",
     },
     "openai": {
@@ -103,6 +104,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "openai_api_key",
         "help_url": "https://platform.openai.com/api-keys",
+        "key_instructions": "התחבר ל-OpenAI Platform, לחץ Create new secret key והעתק את המפתח שנוצר.",
         "default_model": "gpt-5.4",
         "base_url": None,
     },
@@ -111,6 +113,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "anthropic",
         "secret_key": "anthropic_api_key",
         "help_url": "https://console.anthropic.com/settings/keys",
+        "key_instructions": "התחבר ל-Anthropic Console, בחר Workspace מתאים, לחץ Create Key והעתק את המפתח.",
         "default_model": "claude-opus-4-7",
         "fallback_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
     },
@@ -119,6 +122,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "openrouter_api_key",
         "help_url": "https://openrouter.ai/settings/keys",
+        "key_instructions": "התחבר ל-OpenRouter, לחץ Create Key, הגדר שם או מגבלת קרדיט אם צריך והעתק.",
         "default_model": "openai/gpt-5.4",
         "base_url": URL_OPENROUTER,
         "validation_path": "/key",
@@ -129,6 +133,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "groq_api_key",
         "help_url": "https://console.groq.com/keys",
+        "key_instructions": "התחבר ל-Groq Console, לחץ Create API Key והעתק את המפתח.",
         "default_model": "openai/gpt-oss-120b",
         "base_url": URL_GROQ,
     },
@@ -137,6 +142,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "deepseek_api_key",
         "help_url": "https://platform.deepseek.com/api_keys",
+        "key_instructions": "התחבר ל-DeepSeek Platform, פתח API keys, צור מפתח חדש והעתק.",
         "default_model": "deepseek-v4-flash",
         "base_url": URL_DEEPSEEK,
         "fallback_models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
@@ -145,7 +151,8 @@ MODEL_PROVIDER_CONFIGS = {
         "label": "Alibaba Qwen / DashScope",
         "kind": "openai_compatible",
         "secret_key": "qwen_api_key",
-        "help_url": "https://bailian.console.aliyun.com/",
+        "help_url": "https://bailian.console.aliyun.com/?tab=model#/api-key",
+        "key_instructions": "התחבר ל-Alibaba Model Studio/Bailian, בחר אזור, לחץ Create API Key והעתק.",
         "default_model": "qwen-plus",
         "base_url": URL_QWEN,
         "fallback_models": ["qwen-plus", "qwen-max", "qwen-turbo"],
@@ -154,7 +161,8 @@ MODEL_PROVIDER_CONFIGS = {
         "label": "Zhipu GLM",
         "kind": "openai_compatible",
         "secret_key": "zhipu_api_key",
-        "help_url": "https://open.bigmodel.cn/usercenter/apikeys",
+        "help_url": "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
+        "key_instructions": "התחבר ל-Zhipu Open Platform, בחר פרויקט, צור API Key והעתק.",
         "default_model": "glm-5.1",
         "base_url": URL_ZHIPU,
         "fallback_models": ["glm-5.1", "glm-4.7", "glm-4-flash"],
@@ -164,6 +172,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "moonshot_api_key",
         "help_url": "https://platform.moonshot.ai/console/api-keys",
+        "key_instructions": "התחבר ל-Kimi/Moonshot Platform, בחר את הפרויקט, צור API Key והעתק.",
         "default_model": "kimi-k2.6",
         "base_url": URL_MOONSHOT,
         "fallback_models": ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k"],
@@ -173,6 +182,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "mistral_api_key",
         "help_url": "https://console.mistral.ai/api-keys",
+        "key_instructions": "התחבר ל-Mistral Console, לחץ Create new key והעתק מיד כי המפתח מוצג פעם אחת.",
         "default_model": "mistral-large-latest",
         "base_url": URL_MISTRAL,
         "fallback_models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
@@ -182,6 +192,7 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "openai_compatible",
         "secret_key": "together_api_key",
         "help_url": "https://api.together.ai/settings/api-keys",
+        "key_instructions": "התחבר ל-Together AI, פתח את Project API keys, לחץ Create API Key והעתק מיד.",
         "default_model": "openai/gpt-oss-20b",
         "base_url": URL_TOGETHER,
         "fallback_models": ["openai/gpt-oss-20b", "Qwen/Qwen3.5-397B-A17B", "zai-org/GLM-5"],
@@ -190,7 +201,8 @@ MODEL_PROVIDER_CONFIGS = {
         "label": "Perplexity",
         "kind": "openai_compatible",
         "secret_key": "perplexity_api_key",
-        "help_url": "https://www.perplexity.ai/settings/api",
+        "help_url": "https://console.perplexity.ai/",
+        "key_instructions": "התחבר ל-Perplexity API Portal, צור API Group אם צריך, פתח API Keys ולחץ Generate.",
         "default_model": "sonar-pro",
         "base_url": URL_PERPLEXITY,
         "models_path": "/v1/models",
@@ -200,7 +212,8 @@ MODEL_PROVIDER_CONFIGS = {
         "label": "xAI",
         "kind": "openai_compatible",
         "secret_key": "xai_api_key",
-        "help_url": "https://console.x.ai/",
+        "help_url": "https://console.x.ai/team/default/api-keys",
+        "key_instructions": "התחבר ל-xAI Console, פתח API Keys, לחץ Create API Key והעתק את המפתח.",
         "default_model": "grok-4",
         "base_url": URL_XAI,
         "fallback_models": ["grok-4", "grok-3"],
@@ -469,12 +482,21 @@ def provider_secret_key(provider):
 
 def provider_help_url(provider=None, secret_key=None):
     if secret_key == "tavily_api_key":
-        return "https://app.tavily.com/"
+        return "https://app.tavily.com/home"
     if secret_key:
         for config in MODEL_PROVIDER_CONFIGS.values():
             if config.get("secret_key") == secret_key:
                 return config.get("help_url", "")
     return provider_config(provider).get("help_url", "")
+
+def provider_key_instructions(provider=None, secret_key=None):
+    if secret_key == "tavily_api_key":
+        return "התחבר ל-Tavily Platform והעתק מפתח מהדשבורד. אם אין מפתח, צור מפתח חדש והעתק אותו לכאן."
+    if secret_key:
+        for config in MODEL_PROVIDER_CONFIGS.values():
+            if config.get("secret_key") == secret_key:
+                return config.get("key_instructions", "")
+    return provider_config(provider).get("key_instructions", "")
 
 def provider_default_model(provider):
     return provider_config(provider).get("default_model", "")
