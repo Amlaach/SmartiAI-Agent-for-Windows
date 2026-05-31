@@ -3,7 +3,7 @@ from .common import *
 from .config import *
 from .ui_styles import *
 from .ui_controls import *
-from .workers import FetchModelsWorker
+from .workers import FetchModelsWorker, ApiKeyValidationWorker
 
 def create_back_button(target_page_func):
     btn = QPushButton()
@@ -183,7 +183,7 @@ class ApiKeyRequiredDialog(QDialog):
         layout.addWidget(buttons)
 
     def api_key(self):
-        return self.api_key_edit.text().strip()
+        return sanitize_secret_value(self.api_key_edit.text())
 
 class UsageStatsPage(QWidget):
     def __init__(self, core, main_window):
@@ -705,6 +705,13 @@ class SettingsPage(QWidget):
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.setInterval(350)
         self.autosave_timer.timeout.connect(self._save_from_ui)
+        self.api_key_validation_timer = QTimer(self)
+        self.api_key_validation_timer.setSingleShot(True)
+        self.api_key_validation_timer.setInterval(900)
+        self.api_key_validation_timer.timeout.connect(self._validate_current_api_key_before_save)
+        self.api_key_validation_worker = None
+        self._api_key_validation_generation = 0
+        self._validated_api_keys = set()
         
         top_bar = QHBoxLayout()
         self.back_btn = create_back_button(self.handle_back)
@@ -757,7 +764,7 @@ class SettingsPage(QWidget):
             self.core._ensure_secret_loaded(secret_key)
 
         self.provider_combo = NoScrollComboBox()
-        self.provider_combo.addItems(["gemini", "openai", "anthropic", "openrouter", "groq", "local"])
+        self.provider_combo.addItems(MODEL_PROVIDER_ORDER)
         self.provider_combo.setCurrentText(self.core.settings.get("api_mode", "gemini"))
         self.provider_combo.setStyleSheet(COMBOBOX_CSS)
         self.provider_combo.currentTextChanged.connect(self.on_provider_change)
@@ -765,10 +772,12 @@ class SettingsPage(QWidget):
         self.model_combo = NoScrollComboBox()
         self.model_combo.setStyleSheet(COMBOBOX_CSS)
         
-        self.api_key_edit = QLineEdit()
+        self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
-        self.api_key_edit.editingFinished.connect(lambda: self.on_provider_change(self.provider_combo.currentText()))
-        self.tavily_key = QLineEdit(self.core.settings.get("tavily_api_key", ""))
+        self.api_key_status = QLabel("")
+        self.api_key_status.setWordWrap(True)
+        self.api_key_status.setStyleSheet(muted_label_css(12))
+        self.tavily_key = MaskedSecretLineEdit(self.core.settings.get("tavily_api_key", ""))
         self.local_url = QLineEdit(self.core.settings.get("local_server_url", "http://localhost:1234/v1"))
         
         self.permission_combo = SegmentedControl()
@@ -885,7 +894,7 @@ class SettingsPage(QWidget):
         self.tts_voice_cb.setStyleSheet(CHECKBOX_CSS)
         self.tts_cb.stateChanged.connect(lambda state: self.tts_voice_cb.setChecked(True) if state == 2 else None)
 
-        self.insecure_ssl_cb = SmartiCheckBox("אפשר מצב תאימות חיבור לכלים חיצוניים (פחות בטוח)")
+        self.insecure_ssl_cb = SmartiCheckBox("אפשר תאימות SSL לכלים חיצוניים (פחות בטוח)")
         self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", False))
         self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
@@ -1052,7 +1061,8 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(ai, "מודלי AI")
         self._add_field("ספק המודל", self.provider_combo, ai, "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.")
-        self._add_field("מפתח גישה לספק המודל", self.api_key_edit, ai, "נדרש רק לספקים חיצוניים. המפתח נשמר בצורה מוגנת ומשמש להתחברות לחשבון שלך.")
+        self._add_field("מפתח גישה לספק המודל", self.api_key_edit, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
+        ai.addWidget(self.api_key_status)
         self._add_field("מודל", self.model_combo, ai, "בחר את המודל שיריץ את סמארטי. מודל חזק יותר בדרך כלל מדויק יותר, אך עשוי לעלות יותר.")
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי רק כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.")
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
@@ -1109,7 +1119,7 @@ class SettingsPage(QWidget):
         voice.addStretch()
 
         self._add_internal_back(advanced, "מתקדם")
-        self._add_checkbox(self.insecure_ssl_cb, advanced, "אפשרות תאימות למקרים שבהם כלים חיצוניים מתקשים להתחבר. פחות בטוח, ולכן מומלץ להשאיר כבוי.")
+        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פחות בטוח, ולכן מומלץ להשאיר כבוי אלא אם יש בעיית חיבור ידועה.")
         self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.")
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.")
         self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.")
@@ -1178,18 +1188,26 @@ class SettingsPage(QWidget):
         self.settings_stack.setCurrentWidget(self.settings_home_page)
 
     def on_provider_change(self, text):
+        text = normalize_provider_name(text)
         if text == "local":
-            self.api_key_edit.setText("lm-studio")
+            self.api_key_edit.set_secret("")
+            self.api_key_edit.setPlaceholderText("לא נדרש מפתח למודל מקומי")
             self.api_key_edit.setEnabled(False)
+            self.api_key_status.setText("")
         else:
             self.core.ensure_provider_secret(text)
-            self.api_key_edit.setText(self.core.settings.get(f"{text}_api_key", ""))
+            secret_key = provider_secret_key(text)
+            saved_key = self.core.settings.get(secret_key, "") if secret_key else ""
             self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
+            self.api_key_edit.set_secret(saved_key)
+            self._validated_api_keys.add((text, sanitize_secret_value(saved_key)))
+            self.api_key_status.setText(f"מפתח שמור: {mask_secret_value(saved_key)}" if saved_key else "")
         self.model_combo.clear()
         self.model_combo.addItem("טוען מודלים...")
         self.fetch_worker = FetchModelsWorker(
             text,
-            self.api_key_edit.text(),
+            self.api_key_edit.secret(),
             self.core.settings.get("local_server_url", ""),
             self.core.settings.get("allow_insecure_ssl_compat", False)
         )
@@ -1211,7 +1229,9 @@ class SettingsPage(QWidget):
             self.model_combo.addItems(models)
             saved_model = self.core.settings.get(f"selected_{provider}_model", "")
             if saved_model in models: self.model_combo.setCurrentText(saved_model)
-        else: self.model_combo.addItem(self.core.settings.get(f"selected_{provider}_model", ""))
+        else:
+            fallback = self.core.settings.get(f"selected_{provider}_model", "") or provider_default_model(provider)
+            self.model_combo.addItem(fallback)
         self._suppress_autosave = previous_suppress
         self._schedule_autosave()
 
@@ -1234,8 +1254,11 @@ class SettingsPage(QWidget):
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
 
+        self.api_key_edit.secretEdited.connect(self._on_api_key_edited)
+        self.api_key_edit.editingFinished.connect(self._validate_current_api_key_before_save)
+
         for edit in [
-            self.api_key_edit, self.tavily_key, self.local_url, self.email, self.pwd,
+            self.tavily_key, self.local_url, self.email, self.pwd,
             self.email_from_name, self.email_imap_host, self.email_imap_port,
             self.email_smtp_host, self.email_smtp_port, self.email_max_attachment_mb,
             self.cmd_timeout, self.tool_timeout, self.mcp_timeout, self.max_chars_edit,
@@ -1253,6 +1276,77 @@ class SettingsPage(QWidget):
         if getattr(self, "_suppress_autosave", False):
             return
         self.autosave_timer.start()
+
+    def _on_api_key_edited(self, _text=""):
+        if getattr(self, "_suppress_autosave", False):
+            return
+        provider = normalize_provider_name(self.provider_combo.currentText())
+        if provider == "local":
+            return
+        key = sanitize_secret_value(self.api_key_edit.secret())
+        if key:
+            self.api_key_status.setText("המפתח ייבדק לפני שמירה...")
+            self.api_key_validation_timer.start()
+        else:
+            self.api_key_status.setText("מפתח ריק לא יישמר.")
+
+    def _api_key_is_validated(self, provider, key):
+        key = sanitize_secret_value(key)
+        return not key or (normalize_provider_name(provider), key) in self._validated_api_keys
+
+    def _validate_current_api_key_before_save(self):
+        if getattr(self, "_suppress_autosave", False):
+            return
+        provider = normalize_provider_name(self.provider_combo.currentText())
+        if provider == "local":
+            return
+        key = sanitize_secret_value(self.api_key_edit.secret())
+        secret_key = provider_secret_key(provider)
+        if not secret_key:
+            return
+        if not key:
+            self.api_key_status.setText("מפתח ריק לא נשמר.")
+            return
+        saved_key = sanitize_secret_value(self.core.settings.get(secret_key, ""))
+        if key == saved_key or self._api_key_is_validated(provider, key):
+            self.api_key_status.setText(f"מפתח שמור: {mask_secret_value(key)}")
+            self._schedule_autosave()
+            return
+        self._api_key_validation_generation += 1
+        generation = self._api_key_validation_generation
+        self.api_key_status.setText(f"בודק מפתח מול {provider_display_name(provider)}...")
+        worker = ApiKeyValidationWorker(
+            provider,
+            key,
+            self.local_url.text().strip() or self.core.settings.get("local_server_url", ""),
+            self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", False),
+        )
+        self.api_key_validation_worker = worker
+        worker.finished_signal.connect(lambda p, k, ok, msg, models, gen=generation: self._on_api_key_validation_finished(gen, p, k, ok, msg, models))
+        worker.start()
+
+    def _on_api_key_validation_finished(self, generation, provider, key, ok, message, models):
+        if generation != self._api_key_validation_generation:
+            return
+        provider = normalize_provider_name(provider)
+        current_provider = normalize_provider_name(self.provider_combo.currentText())
+        if provider != current_provider or sanitize_secret_value(self.api_key_edit.secret()) != sanitize_secret_value(key):
+            return
+        if not ok:
+            self.api_key_status.setText(f"המפתח לא נשמר: {message or 'בדיקת תקינות נכשלה'}.")
+            return
+        secret_key = provider_secret_key(provider)
+        self._validated_api_keys.add((provider, sanitize_secret_value(key)))
+        self.core.settings["api_mode"] = provider
+        self.core.settings[secret_key] = sanitize_secret_value(key)
+        self.core._save_settings()
+        self.api_key_edit.set_secret(key)
+        self.api_key_status.setText(f"מפתח תקין ושמור: {mask_secret_value(key)}")
+        if models:
+            self.populate_models(models, provider)
+        self.core.system_prompt = self.core._load_system_prompt()
+        self.core.setup_model()
+        self._schedule_autosave()
 
     def _permission_profile_key(self):
         return {1: "locked_down", 2: "balanced", 3: "max_autonomy"}.get(self.permission_combo.currentIndex() + 1, "balanced")
@@ -1379,8 +1473,17 @@ class SettingsPage(QWidget):
         if selected_model and selected_model != "טוען מודלים...":
             self.core.settings[f"selected_{provider}_model"] = selected_model
         if provider != "local":
-            self.core.settings[f"{provider}_api_key"] = self.api_key_edit.text()
-        self.core.settings["tavily_api_key"] = self.tavily_key.text()
+            secret_key = provider_secret_key(provider)
+            candidate_key = sanitize_secret_value(self.api_key_edit.secret())
+            previous_key = sanitize_secret_value(before.get(secret_key, "")) if secret_key else ""
+            if secret_key and (candidate_key == previous_key or self._api_key_is_validated(provider, candidate_key)):
+                self.core.settings[secret_key] = candidate_key
+            elif secret_key and candidate_key:
+                self.core.settings[secret_key] = previous_key
+                self._validate_current_api_key_before_save()
+            elif secret_key:
+                self.core.settings[secret_key] = previous_key
+        self.core.settings["tavily_api_key"] = sanitize_secret_value(self.tavily_key.secret() if hasattr(self.tavily_key, "secret") else self.tavily_key.text())
         self.core.settings["local_server_url"] = self.local_url.text().strip() or "http://localhost:1234/v1"
         self.core.settings["email_address"] = self.email.text()
         self.core.settings["email_password"] = self.pwd.text().replace(" ", "")
@@ -1438,10 +1541,7 @@ class SettingsPage(QWidget):
         if not changed:
             return
         self.core._save_settings()
-        model_reload_keys = {
-            "api_mode", "local_server_url", "gemini_api_key", "openai_api_key",
-            "anthropic_api_key", "openrouter_api_key", "groq_api_key",
-        }
+        model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys()
         needs_model_reload = any(key in model_reload_keys or key.startswith("selected_") for key in changed)
         needs_mcp_refresh = any(key in {
             "enable_mcp_clawhub", "enable_skills_beta", "mcp_require_pinned_versions",
@@ -1637,14 +1737,21 @@ class AboutPage(QWidget):
         hero_layout.setSpacing(18)
 
         logo_lbl = QLabel()
-        logo_lbl.setFixedSize(152, 152)
+        logo_lbl.setFixedSize(176, 164)
         logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_lbl.setStyleSheet("border: none; background: transparent;")
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(logo_path):
             pixmap = QPixmap(logo_path)
             if not pixmap.isNull():
-                logo_lbl.setPixmap(pixmap.scaled(146, 146, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                canvas = QPixmap(176, 164)
+                canvas.fill(Qt.GlobalColor.transparent)
+                scaled_logo = pixmap.scaled(160, 148, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                painter = QPainter(canvas)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawPixmap((canvas.width() - scaled_logo.width()) // 2, (canvas.height() - scaled_logo.height()) // 2, scaled_logo)
+                painter.end()
+                logo_lbl.setPixmap(canvas)
         else:
             logo_lbl.setText("S")
             logo_lbl.setFont(QFont("Segoe UI", 46, QFont.Weight.Bold))

@@ -30,6 +30,43 @@ def _escape_with_soft_breaks(text):
     parts.append(html.escape(raw[last:]))
     return "".join(parts)
 
+def _clean_href(value):
+    href = html.unescape(str(value or "")).replace("\u200b", "").strip()
+    return href
+
+def _normalize_href(value):
+    href = _clean_href(value)
+    return f"https://{href}" if href.startswith("www.") else href
+
+def _is_valid_display_href(value):
+    href = _normalize_href(value)
+    if not href or href in {"#", "about:blank"}:
+        return False
+    parsed = urllib.parse.urlparse(href)
+    return parsed.scheme.lower() in {"http", "https", "mailto"} and bool(parsed.netloc or parsed.scheme == "mailto")
+
+def _repair_markdown_links(text):
+    def repl(match):
+        label = str(match.group(1) or "").strip()
+        href = _normalize_href(match.group(2))
+        if not _is_valid_display_href(href):
+            return label
+        return f"[{label or href}]({href})"
+    return re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
+
+def _sanitize_rendered_links(rendered_html):
+    def repl(match):
+        quote = match.group(1)
+        href = _normalize_href(match.group(2))
+        inner = match.group(3) or ""
+        if not _is_valid_display_href(href):
+            return inner
+        display_inner = inner.strip() or html.escape(href)
+        return f'<a href={quote}{html.escape(href, quote=True)}{quote}>{display_inner}</a>'
+    rendered_html = re.sub(r'<a\s+[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', repl, str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
+    rendered_html = re.sub(r'<a\s+[^>]*href\s*=\s*[^>]*>\s*</a>', '', rendered_html, flags=re.IGNORECASE | re.DOTALL)
+    return rendered_html
+
 def _clean_step_for_display(text):
     clean = html.unescape(str(text or "")).strip()
     clean = re.sub(r'```.*?```', '', clean, flags=re.DOTALL).strip()
@@ -154,6 +191,7 @@ class MessageBubble(QFrame):
             else f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {BUBBLE_AGENT_END})"
         )
         color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
+        link_color = BUBBLE_USER_TEXT if self.is_user else (ACCENT_WARM_COLOR if CURRENT_THEME == "dark" else ACCENT_COLOR)
         radius = "24px"
         border = f"1px solid {USER_BUBBLE_BORDER if self.is_user else SOFT_LINE_COLOR}"
 
@@ -169,7 +207,7 @@ class MessageBubble(QFrame):
         self.setStyleSheet(
             f"MessageBubble {{ background: {bg}; border: {border}; border-radius: {radius}; margin: 5px 0px; }}"
             f"QLabel {{ color: {color}; font-size: 15px; font-family: 'Segoe UI', Arial; background: transparent; }}"
-            f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}"
+            f"a {{ color: {link_color}; text-decoration: underline; font-weight: 700; }}"
             f"code {{ background-color: {CODE_BG_COLOR}; padding: 2px 4px; border-radius: 4px; font-family: Consolas; }}"
             f"pre {{ background-color: {CODE_BG_COLOR}; padding: 12px; border-radius: 14px; margin: 0; }}"
             f"p {{ margin: 0 0 5px 0; }}"
@@ -205,19 +243,20 @@ class MessageBubble(QFrame):
             
     def set_final_text(self, final_text):
         if not final_text: return
-        display_text = html.unescape(str(final_text))
+        display_text = _repair_markdown_links(html.unescape(str(final_text)))
         self.copy_text = display_text
         self.stop_steps_shimmer()
         self.final_label.show()
-        safe_text = _escape_with_soft_breaks(display_text)
         if MARKDOWN_INSTALLED and not self.is_user:
             try:
                 import markdown
-                rendered_html = markdown.markdown(safe_text, extensions=['fenced_code', 'tables', 'nl2br'])
+                safe_markdown = html.escape(display_text, quote=False)
+                rendered_html = markdown.markdown(safe_markdown, extensions=['fenced_code', 'tables', 'nl2br'])
             except Exception:
-                rendered_html = safe_text.replace('\n', '<br>')
+                rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
         else:
-            rendered_html = safe_text.replace('\n', '<br>')
+            rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
+        rendered_html = _sanitize_rendered_links(rendered_html)
         if not rendered_html.lstrip().startswith("<"):
             rendered_html = f"<span>{rendered_html}</span>"
         self.final_label.setText(rendered_html)
@@ -251,7 +290,7 @@ class MessageBubble(QFrame):
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
-    def __init__(self, text, is_user=False, parent_width=450):
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True):
         super().__init__()
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -259,6 +298,7 @@ class ChatMessageContainer(QWidget):
         self.setStyleSheet("background: transparent;")
         self.bubble = MessageBubble(text, is_user, parent_width)
         self.is_user = is_user
+        self.show_actions = bool(show_actions)
         self._tts_active = False
         self._tts_blocked = False
 
@@ -293,22 +333,24 @@ class ChatMessageContainer(QWidget):
         actions_layout.setContentsMargins(12, 0, 12, 0)
         actions_layout.setSpacing(4)
 
-        self.copy_btn = QPushButton()
-        self.copy_btn.setFixedSize(24, 24)
-        self.copy_btn.setToolTip("העתק")
-        self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        copy_icon_path = os.path.join(ASSETS_DIR, "copy_icon.png")
-        if os.path.exists(copy_icon_path):
-            self.copy_btn.setIcon(QIcon(copy_icon_path))
-            self.copy_btn.setIconSize(QSize(15, 15))
-        else:
-            self.copy_btn.setText("⧉")
-        self.copy_btn.clicked.connect(self.copy_message_text)
+        self.copy_btn = None
+        if self.show_actions:
+            self.copy_btn = QPushButton()
+            self.copy_btn.setFixedSize(24, 24)
+            self.copy_btn.setToolTip("העתק")
+            self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            copy_icon_path = os.path.join(ASSETS_DIR, "copy_icon.png")
+            if os.path.exists(copy_icon_path):
+                self.copy_btn.setIcon(QIcon(copy_icon_path))
+                self.copy_btn.setIconSize(QSize(15, 15))
+            else:
+                self.copy_btn.setText("⧉")
+            self.copy_btn.clicked.connect(self.copy_message_text)
 
         self.tts_btn = None
         self.tts_read_icon = QIcon()
         self.tts_stop_icon = QIcon()
-        if not is_user:
+        if self.show_actions and not is_user:
             self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
             self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
             self.tts_btn = QPushButton()
@@ -317,7 +359,10 @@ class ChatMessageContainer(QWidget):
             self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
 
-        if is_user:
+        if not self.show_actions:
+            self.actions_container.setFixedHeight(0)
+            self.actions_container.hide()
+        elif is_user:
             actions_layout.addWidget(self.copy_btn)
             actions_layout.addStretch()
         else:
@@ -355,7 +400,8 @@ class ChatMessageContainer(QWidget):
     def apply_theme(self):
         self.setStyleSheet("background: transparent;")
         self.actions_container.setStyleSheet("background: transparent;")
-        self.copy_btn.setStyleSheet(self._button_css(False))
+        if self.copy_btn:
+            self.copy_btn.setStyleSheet(self._button_css(False))
         if self.tts_btn:
             self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
             self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
@@ -434,6 +480,8 @@ class ChatMessageContainer(QWidget):
         self.actions_opacity.setOpacity(1.0)
 
     def copy_message_text(self):
+        if not self.copy_btn:
+            return
         QApplication.clipboard().setText(self.bubble.plain_text())
 
 # Disabled fallback prototype for a custom PyQt quick-reply popup.
@@ -650,7 +698,7 @@ class ChatWindow(QMainWindow):
         self.about_page = None
         
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
-        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False)
+        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False, show_actions=False)
         QTimer.singleShot(1200, self.core.resume_background_tasks)
         
         if SPEECH_INSTALLED:
@@ -1136,10 +1184,10 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user):
+    def add_message(self, text, is_user, show_actions=True):
         if not text and is_user: return
         available_width = self.scroll.viewport().width() or self.width()
-        container = ChatMessageContainer(text, is_user, available_width)
+        container = ChatMessageContainer(text, is_user, available_width, show_actions=show_actions)
         self._wire_message_container(container)
         self.chat_layout.addWidget(container)
         QTimer.singleShot(0, container.start_entry_animation)
@@ -1275,7 +1323,7 @@ class ChatWindow(QMainWindow):
         self.core._save_settings()
         self.core.system_prompt = self.core._load_system_prompt()
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (ניקוי צ'אט) ---\n{'='*50}")
-        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False)
+        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False, show_actions=False)
 
 class AnimatedSplash(QWidget):
     def __init__(self, anim_path, fallback_path, size, border_color, border_width, radius, bg_color):

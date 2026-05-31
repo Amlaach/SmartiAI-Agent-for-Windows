@@ -72,6 +72,52 @@ class NoScrollComboBox(QComboBox):
         self.view().setMaximumWidth(max(220, self.width()))
         super().showPopup()
 
+class MaskedSecretLineEdit(QLineEdit):
+    secretEdited = pyqtSignal(str)
+
+    def __init__(self, secret="", parent=None):
+        super().__init__(parent)
+        self._secret_value = ""
+        self._editing_secret = False
+        self.textEdited.connect(self._on_text_edited)
+        self.set_secret(secret)
+
+    def set_secret(self, value):
+        self._secret_value = sanitize_secret_value(value)
+        self._editing_secret = False
+        previous = self.blockSignals(True)
+        super().setText(mask_secret_value(self._secret_value))
+        self.blockSignals(previous)
+        self.setModified(False)
+
+    def secret(self):
+        if self._editing_secret:
+            return sanitize_secret_value(self.text())
+        return self._secret_value
+
+    def has_pending_secret(self):
+        return self._editing_secret
+
+    def _on_text_edited(self, text):
+        self._editing_secret = True
+        self.secretEdited.emit(sanitize_secret_value(text))
+
+    def focusInEvent(self, event):
+        if not self._editing_secret and self._secret_value:
+            tail = self._secret_value[-4:]
+            previous = self.blockSignals(True)
+            super().setText("")
+            self.blockSignals(previous)
+            self.setPlaceholderText(f"הדבק מפתח חדש (הקיים מסתיים ב-{tail})")
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        if self._editing_secret and not sanitize_secret_value(self.text()):
+            self.set_secret(self._secret_value)
+        elif not self._editing_secret:
+            self.set_secret(self._secret_value)
+        super().focusOutEvent(event)
+
 class SegmentedControl(QWidget):
     currentIndexChanged = pyqtSignal(int)
 

@@ -102,39 +102,37 @@ class FetchModelsWorker(QThread):
         self.allow_insecure_ssl = bool(allow_insecure_ssl)
 
     def _request_kwargs(self):
-        if self.allow_insecure_ssl:
-            try:
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            except Exception:
-                pass
-            return {"verify": False}
-        return {}
+        return ssl_request_kwargs(self.allow_insecure_ssl)
 
     def run(self):
-        models = []
-        try:
-            if self.provider == "gemini":
-                if not self.api_key: return self.finished_signal.emit([])
-                models_url = get_url(URL_GEMINI_MODELS).split("?key=", 1)[0]
-                res = requests.get(models_url, headers={"x-goog-api-key": self.api_key}, timeout=10, **self._request_kwargs())
-                if res.status_code == 200: models = [m['name'].replace('models/', '') for m in res.json().get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            elif self.provider == "openai":
-                if not self.api_key: return self.finished_signal.emit([])
-                res = requests.get(get_url(URL_OPENAI_MODELS), headers={"Authorization": f"Bearer {self.api_key}"}, timeout=10, **self._request_kwargs())
-                if res.status_code == 200: models = sorted([m['id'] for m in res.json().get('data', []) if "gpt" in m['id'] or "o1" in m['id'] or "o3" in m['id']], reverse=True)
-            elif self.provider == "anthropic": models = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"]
-            elif self.provider == "openrouter":
-                res = requests.get(get_url(URL_OPENROUTER_MODELS), timeout=10, **self._request_kwargs())
-                if res.status_code == 200: models = [m['id'] for m in res.json().get('data', [])]
-            elif self.provider == "groq":
-                if not self.api_key: return self.finished_signal.emit([])
-                res = requests.get(get_url(URL_GROQ_MODELS), headers={"Authorization": f"Bearer {self.api_key}"}, timeout=10, **self._request_kwargs())
-                if res.status_code == 200: models = [m['id'] for m in res.json().get('data', [])]
-            elif self.provider == "local":
-                res = requests.get(f"{self.url}/models", timeout=5, **self._request_kwargs())
-                if res.status_code == 200: models = [m['id'] for m in res.json().get('data', [])]
-        except Exception: pass
+        models, _, _ = fetch_text_models_for_provider(
+            self.provider,
+            self.api_key,
+            self.url,
+            self.allow_insecure_ssl,
+            validate_key=False,
+        )
         self.finished_signal.emit(models)
+
+class ApiKeyValidationWorker(QThread):
+    finished_signal = pyqtSignal(str, str, bool, str, list)
+
+    def __init__(self, provider, api_key, url, allow_insecure_ssl=False):
+        super().__init__()
+        self.provider = normalize_provider_name(provider)
+        self.api_key = sanitize_secret_value(api_key)
+        self.url = url
+        self.allow_insecure_ssl = bool(allow_insecure_ssl)
+
+    def run(self):
+        models, ok, message = fetch_text_models_for_provider(
+            self.provider,
+            self.api_key,
+            self.url,
+            self.allow_insecure_ssl,
+            validate_key=True,
+        )
+        self.finished_signal.emit(self.provider, self.api_key, bool(ok), str(message or ""), models)
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

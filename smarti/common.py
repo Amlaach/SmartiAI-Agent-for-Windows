@@ -73,7 +73,145 @@ URL_GEMINI_MODELS = "aHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjF
 URL_OPENAI_MODELS = "aHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MS9tb2RlbHM="
 URL_OPENROUTER_MODELS = "aHR0cHM6Ly9vcGVucm91dGVyLmFpL2FwaS92MS9tb2RlbHM="
 URL_GROQ_MODELS = "aHR0cHM6Ly9hcGkuZ3JvcS5jb20vb3BlbmFpL3YxL21vZGVscw=="
+URL_ANTHROPIC_MODELS = "aHR0cHM6Ly9hcGkuYW50aHJvcGljLmNvbS92MS9tb2RlbHM="
+URL_DEEPSEEK = "aHR0cHM6Ly9hcGkuZGVlcHNlZWsuY29t"
+URL_QWEN = "aHR0cHM6Ly9kYXNoc2NvcGUuYWxpeXVuY3MuY29tL2NvbXBhdGlibGUtbW9kZS92MQ=="
+URL_ZHIPU = "aHR0cHM6Ly9vcGVuLmJpZ21vZGVsLmNuL2FwaS9wYWFzL3Y0"
+URL_MOONSHOT = "aHR0cHM6Ly9hcGkubW9vbnNob3QuYWkvdjE="
+URL_MISTRAL = "aHR0cHM6Ly9hcGkubWlzdHJhbC5haS92MQ=="
+URL_TOGETHER = "aHR0cHM6Ly9hcGkudG9nZXRoZXIuYWkvdjE="
+URL_PERPLEXITY = "aHR0cHM6Ly9hcGkucGVycGxleGl0eS5haQ=="
+URL_XAI = "aHR0cHM6Ly9hcGkueC5haS92MQ=="
 URL_CLAWHUB_API = "aHR0cHM6Ly9jbGF3aHViLmFpL2FwaS92MQ=="
+
+MODEL_PROVIDER_ORDER = [
+    "gemini", "openai", "anthropic", "openrouter", "groq",
+    "deepseek", "qwen", "zhipu", "moonshot", "mistral",
+    "together", "perplexity", "xai", "local"
+]
+
+MODEL_PROVIDER_CONFIGS = {
+    "gemini": {
+        "label": "Google Gemini",
+        "kind": "gemini",
+        "secret_key": "gemini_api_key",
+        "help_url": "https://aistudio.google.com/app/apikey",
+        "default_model": "gemini-3.1-flash-lite",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "kind": "openai_compatible",
+        "secret_key": "openai_api_key",
+        "help_url": "https://platform.openai.com/api-keys",
+        "default_model": "gpt-5.4",
+        "base_url": None,
+    },
+    "anthropic": {
+        "label": "Anthropic",
+        "kind": "anthropic",
+        "secret_key": "anthropic_api_key",
+        "help_url": "https://console.anthropic.com/settings/keys",
+        "default_model": "claude-opus-4-7",
+        "fallback_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "kind": "openai_compatible",
+        "secret_key": "openrouter_api_key",
+        "help_url": "https://openrouter.ai/settings/keys",
+        "default_model": "openai/gpt-5.4",
+        "base_url": URL_OPENROUTER,
+        "validation_path": "/key",
+        "models_query": "?output_modalities=text",
+    },
+    "groq": {
+        "label": "Groq",
+        "kind": "openai_compatible",
+        "secret_key": "groq_api_key",
+        "help_url": "https://console.groq.com/keys",
+        "default_model": "openai/gpt-oss-120b",
+        "base_url": URL_GROQ,
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "kind": "openai_compatible",
+        "secret_key": "deepseek_api_key",
+        "help_url": "https://platform.deepseek.com/api_keys",
+        "default_model": "deepseek-v4-flash",
+        "base_url": URL_DEEPSEEK,
+        "fallback_models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
+    },
+    "qwen": {
+        "label": "Alibaba Qwen / DashScope",
+        "kind": "openai_compatible",
+        "secret_key": "qwen_api_key",
+        "help_url": "https://bailian.console.aliyun.com/",
+        "default_model": "qwen-plus",
+        "base_url": URL_QWEN,
+        "fallback_models": ["qwen-plus", "qwen-max", "qwen-turbo"],
+    },
+    "zhipu": {
+        "label": "Zhipu GLM",
+        "kind": "openai_compatible",
+        "secret_key": "zhipu_api_key",
+        "help_url": "https://open.bigmodel.cn/usercenter/apikeys",
+        "default_model": "glm-5.1",
+        "base_url": URL_ZHIPU,
+        "fallback_models": ["glm-5.1", "glm-4.7", "glm-4-flash"],
+    },
+    "moonshot": {
+        "label": "Moonshot Kimi",
+        "kind": "openai_compatible",
+        "secret_key": "moonshot_api_key",
+        "help_url": "https://platform.moonshot.ai/console/api-keys",
+        "default_model": "kimi-k2.6",
+        "base_url": URL_MOONSHOT,
+        "fallback_models": ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k"],
+    },
+    "mistral": {
+        "label": "Mistral AI",
+        "kind": "openai_compatible",
+        "secret_key": "mistral_api_key",
+        "help_url": "https://console.mistral.ai/api-keys",
+        "default_model": "mistral-large-latest",
+        "base_url": URL_MISTRAL,
+        "fallback_models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
+    },
+    "together": {
+        "label": "Together AI",
+        "kind": "openai_compatible",
+        "secret_key": "together_api_key",
+        "help_url": "https://api.together.ai/settings/api-keys",
+        "default_model": "openai/gpt-oss-20b",
+        "base_url": URL_TOGETHER,
+        "fallback_models": ["openai/gpt-oss-20b", "Qwen/Qwen3.5-397B-A17B", "zai-org/GLM-5"],
+    },
+    "perplexity": {
+        "label": "Perplexity",
+        "kind": "openai_compatible",
+        "secret_key": "perplexity_api_key",
+        "help_url": "https://www.perplexity.ai/settings/api",
+        "default_model": "sonar-pro",
+        "base_url": URL_PERPLEXITY,
+        "models_path": "/v1/models",
+        "fallback_models": ["sonar-pro", "sonar"],
+    },
+    "xai": {
+        "label": "xAI",
+        "kind": "openai_compatible",
+        "secret_key": "xai_api_key",
+        "help_url": "https://console.x.ai/",
+        "default_model": "grok-4",
+        "base_url": URL_XAI,
+        "fallback_models": ["grok-4", "grok-3"],
+    },
+    "local": {
+        "label": "Local OpenAI-compatible",
+        "kind": "local",
+        "secret_key": None,
+        "default_model": "",
+    },
+}
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
@@ -168,9 +306,14 @@ def ensure_ui_svg_asset(filename, svg_text):
     except Exception:
         return ""
 
-SENSITIVE_SETTING_KEYS = {
-    "gemini_api_key", "openai_api_key", "anthropic_api_key", "openrouter_api_key",
-    "groq_api_key", "tavily_api_key", "email_password", "email_address"
+MODEL_PROVIDER_SECRET_KEYS = {
+    str(config.get("secret_key"))
+    for config in MODEL_PROVIDER_CONFIGS.values()
+    if config.get("secret_key")
+}
+
+SENSITIVE_SETTING_KEYS = MODEL_PROVIDER_SECRET_KEYS | {
+    "tavily_api_key", "email_password", "email_address"
 }
 KEYRING_SERVICE = "SmartiAI"
 SECRET_PREFIX = "DPAPI:"
@@ -309,6 +452,245 @@ SELF_PROTECTED_NAMES = {
 }
 
 _CURRENT_SETTINGS_REF = {"settings": None}
+
+def normalize_provider_name(provider):
+    return str(provider or "").strip().lower()
+
+def provider_config(provider):
+    return MODEL_PROVIDER_CONFIGS.get(normalize_provider_name(provider), {})
+
+def provider_display_name(provider):
+    provider = normalize_provider_name(provider)
+    config = provider_config(provider)
+    return config.get("label") or provider or "provider"
+
+def provider_secret_key(provider):
+    return provider_config(provider).get("secret_key")
+
+def provider_help_url(provider=None, secret_key=None):
+    if secret_key == "tavily_api_key":
+        return "https://app.tavily.com/"
+    if secret_key:
+        for config in MODEL_PROVIDER_CONFIGS.values():
+            if config.get("secret_key") == secret_key:
+                return config.get("help_url", "")
+    return provider_config(provider).get("help_url", "")
+
+def provider_default_model(provider):
+    return provider_config(provider).get("default_model", "")
+
+def provider_fallback_models(provider):
+    config = provider_config(provider)
+    models = list(config.get("fallback_models") or [])
+    default_model = config.get("default_model", "")
+    if default_model and default_model not in models:
+        models.insert(0, default_model)
+    return models
+
+def is_openai_compatible_provider(provider):
+    return provider_config(provider).get("kind") == "openai_compatible"
+
+def provider_requires_api_key(provider):
+    return bool(provider_secret_key(provider))
+
+def provider_base_url(provider, local_url=""):
+    provider = normalize_provider_name(provider)
+    if provider == "local":
+        return str(local_url or "http://localhost:1234/v1").strip().rstrip("/")
+    raw = provider_config(provider).get("base_url")
+    if not raw:
+        return None
+    return get_url(raw).rstrip("/")
+
+def model_provider_secret_keys():
+    return set(MODEL_PROVIDER_SECRET_KEYS)
+
+def sanitize_secret_value(value):
+    return re.sub(r"\s+", "", str(value or ""))
+
+def mask_secret_value(value, visible=4):
+    value = sanitize_secret_value(value)
+    if not value:
+        return ""
+    visible = max(1, int(visible or 4))
+    tail = value[-visible:]
+    hidden_len = max(8, len(value) - len(tail))
+    return ("•" * min(hidden_len, 24)) + tail
+
+_TEXT_MODEL_REJECT_RE = re.compile(
+    r"(?i)("
+    r"embedding|embed|rerank|moderation|omni-moderation|guard|"
+    r"whisper|transcrib|translate|tts|speech|audio|voice|realtime|"
+    r"dall[-_ ]?e|image|imagen|gpt-image|flux|stable[-_ ]?diffusion|sdxl|"
+    r"ocr|clip|vision-?embed"
+    r")"
+)
+
+def _metadata_terms(metadata):
+    if not isinstance(metadata, dict):
+        return ""
+    terms = []
+    for key in ("id", "name", "displayName", "display_name", "description", "owned_by", "type"):
+        value = metadata.get(key)
+        if value:
+            terms.append(str(value))
+    return " ".join(terms)
+
+def is_text_generation_model(provider, model_id, metadata=None):
+    model_id = str(model_id or "").strip()
+    if not model_id:
+        return False
+    data = metadata if isinstance(metadata, dict) else {}
+    arch = data.get("architecture") if isinstance(data.get("architecture"), dict) else {}
+    output_modalities = arch.get("output_modalities") or data.get("output_modalities") or data.get("outputs")
+    if isinstance(output_modalities, str):
+        output_modalities = [output_modalities]
+    if output_modalities:
+        normalized = {str(item).strip().lower() for item in output_modalities}
+        if "text" not in normalized:
+            return False
+    input_modalities = arch.get("input_modalities") or data.get("input_modalities") or data.get("inputs")
+    if isinstance(input_modalities, str):
+        input_modalities = [input_modalities]
+    if input_modalities:
+        normalized = {str(item).strip().lower() for item in input_modalities}
+        if "text" not in normalized:
+            return False
+    combined = f"{model_id} {_metadata_terms(data)}"
+    return not _TEXT_MODEL_REJECT_RE.search(combined)
+
+def _extract_model_id(provider, item):
+    if isinstance(item, str):
+        model_id = item
+    elif isinstance(item, dict):
+        model_id = item.get("id") or item.get("name") or item.get("model") or ""
+    else:
+        model_id = ""
+    model_id = str(model_id or "").strip()
+    if provider == "gemini" and model_id.startswith("models/"):
+        model_id = model_id.replace("models/", "", 1)
+    return model_id
+
+def _dedupe_sorted_models(models):
+    seen = set()
+    cleaned = []
+    for model in models:
+        model = str(model or "").strip()
+        if model and model not in seen:
+            cleaned.append(model)
+            seen.add(model)
+    return sorted(cleaned, key=lambda value: value.lower(), reverse=True)
+
+def _normalize_model_items(provider, items):
+    provider = normalize_provider_name(provider)
+    models = []
+    for item in items or []:
+        model_id = _extract_model_id(provider, item)
+        if provider == "gemini" and isinstance(item, dict):
+            methods = item.get("supportedGenerationMethods", [])
+            if "generateContent" not in methods:
+                continue
+        if is_text_generation_model(provider, model_id, item if isinstance(item, dict) else None):
+            models.append(model_id)
+    return _dedupe_sorted_models(models)
+
+def _models_from_response(provider, payload):
+    provider = normalize_provider_name(provider)
+    if not isinstance(payload, dict):
+        return []
+    if provider == "gemini":
+        return _normalize_model_items(provider, payload.get("models", []))
+    return _normalize_model_items(provider, payload.get("data", []))
+
+def ssl_request_kwargs(allow_insecure_ssl=False):
+    if allow_insecure_ssl:
+        try:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        return {"verify": False}
+    return {}
+
+def _bearer_headers(api_key):
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+def _models_url_for_provider(provider, local_url=""):
+    provider = normalize_provider_name(provider)
+    if provider == "gemini":
+        return get_url(URL_GEMINI_MODELS).split("?key=", 1)[0]
+    if provider == "anthropic":
+        return get_url(URL_ANTHROPIC_MODELS)
+    base_url = provider_base_url(provider, local_url)
+    if not base_url:
+        return get_url(URL_OPENAI_MODELS)
+    path = provider_config(provider).get("models_path", "/models")
+    query = provider_config(provider).get("models_query", "")
+    return f"{base_url}{path}{query}"
+
+def _validation_url_for_provider(provider, local_url=""):
+    provider = normalize_provider_name(provider)
+    config = provider_config(provider)
+    if config.get("validation_path"):
+        base_url = provider_base_url(provider, local_url)
+        return f"{base_url}{config['validation_path']}"
+    return _models_url_for_provider(provider, local_url)
+
+def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_insecure_ssl=False, validate_key=False):
+    provider = normalize_provider_name(provider)
+    api_key = sanitize_secret_value(api_key)
+    kwargs = ssl_request_kwargs(allow_insecure_ssl)
+    headers = {}
+    try:
+        if provider == "local":
+            url = _models_url_for_provider(provider, local_url)
+            response = requests.get(url, timeout=5, **kwargs)
+            if response.status_code == 200:
+                return _models_from_response(provider, response.json()), True, ""
+            return [], False, f"שרת מקומי החזיר {response.status_code}"
+
+        if provider_requires_api_key(provider) and not api_key:
+            models = provider_fallback_models(provider)
+            return models, False, "לא הוזן מפתח API"
+
+        if provider == "gemini":
+            headers = {"x-goog-api-key": api_key}
+        elif provider == "anthropic":
+            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        else:
+            headers = _bearer_headers(api_key)
+
+        if validate_key:
+            validation_response = requests.get(
+                _validation_url_for_provider(provider, local_url),
+                headers=headers,
+                timeout=12,
+                **kwargs,
+            )
+            if validation_response.status_code in {401, 403}:
+                return [], False, "המפתח נדחה על ידי הספק"
+            if validation_response.status_code >= 400:
+                return [], False, f"בדיקת המפתח נכשלה ({validation_response.status_code})"
+            if provider_config(provider).get("validation_path"):
+                model_response = requests.get(
+                    _models_url_for_provider(provider, local_url),
+                    headers=headers,
+                    timeout=12,
+                    **kwargs,
+                )
+                models = _models_from_response(provider, model_response.json()) if model_response.status_code == 200 else provider_fallback_models(provider)
+                return models, True, ""
+            models = _models_from_response(provider, validation_response.json())
+            return models or provider_fallback_models(provider), True, ""
+
+        response = requests.get(_models_url_for_provider(provider, local_url), headers=headers, timeout=10, **kwargs)
+        if response.status_code == 200:
+            models = _models_from_response(provider, response.json())
+            return models or provider_fallback_models(provider), True, ""
+        if response.status_code in {401, 403}:
+            return provider_fallback_models(provider), False, "המפתח נדחה על ידי הספק"
+        return provider_fallback_models(provider), False, f"טעינת המודלים נכשלה ({response.status_code})"
+    except Exception as e:
+        return provider_fallback_models(provider), False, str(e)
 
 def redact_sensitive_text(text, settings=None):
     if text is None: return ""

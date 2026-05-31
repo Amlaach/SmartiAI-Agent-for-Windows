@@ -6,12 +6,9 @@ from .config import *
 class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
     PRESERVE_ON_V2_MIGRATION = {
-        "api_mode", "selected_gemini_model", "selected_openai_model",
-        "selected_anthropic_model", "selected_local_model",
-        "selected_openrouter_model", "selected_groq_model",
-        "local_server_url", "shopping_list", "user_memory",
+        "api_mode", "local_server_url", "shopping_list", "user_memory",
         "read_aloud_all", "read_aloud_voice_only"
-    }
+    } | {f"selected_{provider}_model" for provider in MODEL_PROVIDER_ORDER}
 
     def __init__(self, settings_file, defaults):
         self.settings_file = settings_file

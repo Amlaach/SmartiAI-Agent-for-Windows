@@ -62,6 +62,14 @@ Smarti can work with several model providers:
 - Anthropic
 - OpenRouter
 - Groq
+- DeepSeek
+- Alibaba Qwen / DashScope
+- Zhipu GLM
+- Moonshot Kimi
+- Mistral AI
+- Together AI
+- Perplexity
+- xAI
 - Local OpenAI-compatible servers, such as LM Studio
 
 Model keys and local server settings are configured from the app settings screen.
@@ -196,6 +204,14 @@ Smarti יכול לעבוד עם כמה ספקי מודלים:
 - Anthropic
 - OpenRouter
 - Groq
+- DeepSeek
+- Alibaba Qwen / DashScope
+- Zhipu GLM
+- Moonshot Kimi
+- Mistral AI
+- Together AI
+- Perplexity
+- xAI
 - שרתים מקומיים תואמי OpenAI, כמו LM Studio
 
 מפתחות מודל והגדרות שרת מקומי מוגדרים מתוך מסך ההגדרות באפליקציה.

@@ -4104,10 +4104,10 @@ class SmartiCore:
 
     def setup_model(self):
         self._sync_ssl_compat_env()
-        self.mode = self.settings.get("api_mode", "gemini")
+        self.mode = normalize_provider_name(self.settings.get("api_mode", "gemini"))
         if self.mode == "gemini":
             self.gemini_history = []
-        elif self.mode in ["openai", "local", "openrouter", "groq"]:
+        elif self.mode == "local" or is_openai_compatible_provider(self.mode):
             try:
                 from openai import OpenAI
             except ImportError:
@@ -4115,10 +4115,8 @@ class SmartiCore:
                 self.universal_history = [{"role": "system", "content": self.system_prompt}]
                 logging.error("OpenAI Python package is missing; install openai to use OpenAI-compatible providers.")
                 return
-            base_urls = {"openai": None, "local": self.settings.get("local_server_url", "http://localhost:1234/v1"), "openrouter": get_url(URL_OPENROUTER), "groq": get_url(URL_GROQ)}
-            api_keys = {"openai": self.settings.get("openai_api_key", ""), "local": "lm-studio", "openrouter": self.settings.get("openrouter_api_key", ""), "groq": self.settings.get("groq_api_key", "")}
-            url = base_urls.get(self.mode)
-            key = api_keys.get(self.mode)
+            url = provider_base_url(self.mode, self.settings.get("local_server_url", "http://localhost:1234/v1"))
+            key = "lm-studio" if self.mode == "local" else self.settings.get(provider_secret_key(self.mode), "")
             self._universal_client_key = key if key else "dummy"
             client_kwargs = {"base_url": url, "api_key": key if key else "dummy", "timeout": 120.0}
             if self._allow_insecure_ssl() and (self.mode != "local" or str(url or "").lower().startswith("https://")):
@@ -4161,6 +4159,9 @@ class SmartiCore:
             self.settings = manager.sync_legacy_aliases(self.settings)
         _CURRENT_SETTINGS_REF["settings"] = self.settings
         self._sync_ssl_compat_env()
+        for key in SENSITIVE_SETTING_KEYS:
+            if key in self.settings and self.settings.get(key):
+                self.settings[key] = sanitize_secret_value(self.settings.get(key))
         data = copy.deepcopy(self.settings)
         data.pop("_runtime_trace", None)
         keyring_mod = get_keyring_module()
@@ -4216,13 +4217,16 @@ class SmartiCore:
 
     def _ensure_secret_loaded(self, key):
         if self.settings.get(key):
-            return self.settings.get(key)
+            secret = sanitize_secret_value(self.settings.get(key))
+            self.settings[key] = secret
+            return secret
         keyring_mod = get_keyring_module()
         if not keyring_mod:
             return ""
         try:
             secret = keyring_mod.get_password(KEYRING_SERVICE, key)
             if secret:
+                secret = sanitize_secret_value(secret)
                 self.settings[key] = secret
                 _CURRENT_SETTINGS_REF["settings"] = self.settings
                 return secret
@@ -4231,38 +4235,42 @@ class SmartiCore:
         return ""
 
     def ensure_provider_secret(self, provider):
-        provider = str(provider or "").strip()
-        if provider and provider != "local":
-            return self._ensure_secret_loaded(f"{provider}_api_key")
+        provider = normalize_provider_name(provider)
+        secret_key = provider_secret_key(provider)
+        if secret_key:
+            return self._ensure_secret_loaded(secret_key)
         return ""
 
     def _provider_secret_key(self, provider):
-        provider = str(provider or "").strip().lower()
-        if provider in {"gemini", "openai", "anthropic", "openrouter", "groq"}:
-            return f"{provider}_api_key"
-        return None
+        return provider_secret_key(provider)
 
     def _provider_display_name(self, provider):
-        return {
-            "gemini": "Google Gemini",
-            "openai": "OpenAI",
-            "anthropic": "Anthropic",
-            "openrouter": "OpenRouter",
-            "groq": "Groq",
-            "tavily": "Tavily",
-        }.get(str(provider or "").strip().lower(), str(provider or "").strip() or "provider")
+        if normalize_provider_name(provider) == "tavily":
+            return "Tavily"
+        return provider_display_name(provider)
 
     def _api_key_help_url(self, secret_key, provider=None):
-        provider = str(provider or "").strip().lower()
-        urls = {
-            "gemini_api_key": "https://aistudio.google.com/app/apikey",
-            "openai_api_key": "https://platform.openai.com/api-keys",
-            "anthropic_api_key": "https://console.anthropic.com/settings/keys",
-            "openrouter_api_key": "https://openrouter.ai/settings/keys",
-            "groq_api_key": "https://console.groq.com/keys",
-            "tavily_api_key": "https://app.tavily.com/",
-        }
-        return urls.get(secret_key) or urls.get(f"{provider}_api_key", "")
+        return provider_help_url(provider, secret_key)
+
+    def _validate_api_key_before_store(self, secret_key, api_key):
+        api_key = sanitize_secret_value(api_key)
+        if not api_key:
+            return False, "לא הוזן מפתח API"
+        provider = None
+        for name in MODEL_PROVIDER_ORDER:
+            if provider_secret_key(name) == secret_key:
+                provider = name
+                break
+        if not provider:
+            return True, ""
+        _, ok, message = fetch_text_models_for_provider(
+            provider,
+            api_key,
+            self.settings.get("local_server_url", "http://localhost:1234/v1"),
+            self._allow_insecure_ssl(),
+            validate_key=True,
+        )
+        return bool(ok), message or ""
 
     def _request_missing_api_key(self, secret_key, provider_label, title, message, help_url=""):
         if self._is_background_context():
@@ -4279,8 +4287,14 @@ class SmartiCore:
         except Exception as e:
             logging.warning(f"API-key prompt failed for {secret_key}: {e}")
             return False
-        new_key = str(new_key or "").strip()
+        new_key = sanitize_secret_value(new_key)
         if not new_key:
+            return False
+        ok, validation_message = self._validate_api_key_before_store(secret_key, new_key)
+        if not ok:
+            if self.status_callback:
+                self.status_callback("מפתח ה-API לא נשמר כי בדיקת התקינות נכשלה.")
+            logging.warning(f"API key validation failed for {secret_key}: {validation_message}")
             return False
         self.settings[secret_key] = new_key
         self._save_settings()
@@ -4303,7 +4317,7 @@ class SmartiCore:
         return False
 
     def _ensure_active_provider_api_key(self):
-        provider = str(self.settings.get("api_mode", getattr(self, "mode", "gemini")) or "gemini").strip().lower()
+        provider = normalize_provider_name(self.settings.get("api_mode", getattr(self, "mode", "gemini")) or "gemini")
         if provider == "local":
             if provider != getattr(self, "mode", ""):
                 self.setup_model()
@@ -4743,6 +4757,7 @@ CWD: {current_dir}
 13. כלים חיצוניים, MCP ו-Skills שמסומנים legacy/untrusted אינם זמינים להרצה עד אישור המשתמש במסך הכלים. אם כלי נחסם בגלל trust, הסבר זאת ובקש מהמשתמש לאשר אותו.
 14. העדף כלים מובנים מובנים (`git_status`, `run_project_check`, `list_processes`, `set_clipboard`, `extract_image_text`) על פני פקודת shell חופשית כאשר הם מתאימים.
 15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]` או הערכת `[SMARTI_EVALUATOR]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש.
+16. קישורים בתשובה חייבים להכיל כתובת אמיתית ומלאה. אל תיצור Markdown ריק כמו `[]()` או `[טקסט]()`, ואל תציג קישור אם אין URL תקין.
 
 **[רשימת הכלים הזמינים במערכת]**
 {active_tools_prompt}
@@ -4807,9 +4822,9 @@ CWD: {current_dir}
                     for part in parts:
                         if not part.get('thought', False): ai_response_text += part.get('text', '')
                     return ai_response_text.strip(), usage_dict
-                elif self.mode in ["openai", "local", "openrouter", "groq"]:
+                elif self.mode == "local" or is_openai_compatible_provider(self.mode):
                     if self.mode != "local":
-                        needed_key = self._ensure_secret_loaded(f"{self.mode}_api_key")
+                        needed_key = self._ensure_secret_loaded(provider_secret_key(self.mode))
                         if needed_key and needed_key != getattr(self, "_universal_client_key", ""):
                             self.setup_model()
                     if not getattr(self, "universal_client", None):
@@ -4879,7 +4894,7 @@ CWD: {current_dir}
                 "אם חסר משהו חשוב, ענה בשורה אחת שמתחילה ב-NEEDS_USER: ואז הסבר קצר בעברית.\n\n"
                 f"מטרה:\n{objective}\n\nתצפיות:\n{observations}\n\nתשובה:\n{final_response}"
             )
-            current_model = self.settings.get(f'selected_{self.mode}_model', 'Local')
+            current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
             if self.mode == "gemini":
                 messages = [{"role": "user", "parts": [{"text": verifier_text}]}]
             else:
@@ -4971,7 +4986,7 @@ CWD: {current_dir}
             internal_artifact_replies = 0
             task_started = time.time()
             total_timeout = self._timeout("max_total_task_seconds", 900)
-            current_model = self.settings.get(f'selected_{self.mode}_model', 'Local')
+            current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
 
             logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
             if getattr(self, "agent_runtime", None):
