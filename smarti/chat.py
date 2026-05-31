@@ -20,44 +20,171 @@ def _transparent_icon(size=22):
     pixmap.fill(Qt.GlobalColor.transparent)
     return QIcon(pixmap)
 
-def _escape_with_soft_breaks(text):
-    raw = html.unescape(str(text or ""))
+def _soft_break_escaped_token(token):
+    token = html.escape(str(token or ""))
+    for marker in ("\\", "/", "_", "-", ".", ":", "="):
+        token = token.replace(marker, marker + "\u200b")
+    return token
+
+def _escape_plain_text_with_soft_breaks(text):
+    raw = str(text or "")
     token_re = re.compile(r'(?:[A-Za-z]:\\|\\\\|/|https?://|www\.)[^\s<>{}]{12,}|[^\s<>{}]{42,}')
-    soft_break = "\u200b"
     parts = []
     last = 0
     for match in token_re.finditer(raw):
         parts.append(html.escape(raw[last:match.start()]))
-        token = html.escape(match.group(0))
-        for marker in ("\\", "/", "_", "-", ".", ":", "="):
-            token = token.replace(marker, marker + soft_break)
-        parts.append(token)
+        parts.append(_soft_break_escaped_token(match.group(0)))
         last = match.end()
     parts.append(html.escape(raw[last:]))
+    return "".join(parts)
+
+def _find_local_link_in_text(raw, start):
+    limit = min(len(raw), start + 900)
+    end = limit
+    for marker in ("\n", "\r", "<", ">", "{", "}"):
+        pos = raw.find(marker, start, limit)
+        if pos != -1:
+            end = min(end, pos)
+    chunk = raw[start:end]
+    if not chunk:
+        return None
+    trailing = " \t.,;:!?)]}'\"`׳״"
+    seen = set()
+    for size in range(len(chunk), 2, -1):
+        candidate_text = chunk[:size].rstrip(trailing)
+        if not candidate_text or candidate_text in seen:
+            continue
+        seen.add(candidate_text)
+        following = chunk[len(candidate_text):]
+        next_char = following[:1]
+        if (
+            next_char in {"\\", "/"} or
+            (next_char and candidate_text.endswith(("\\", "/"))) or
+            (next_char and (next_char.isalnum() or next_char in "._-%")) or
+            (next_char == " " and re.match(r" [^\\/]{1,120}[\\/]", following))
+        ):
+            continue
+        path = _local_path_from_href(candidate_text) or _clean_local_path(candidate_text)
+        if _is_safe_local_link_path(path):
+            return candidate_text, path, start + len(candidate_text)
+    return None
+
+def _escape_with_soft_breaks(text):
+    raw = html.unescape(str(text or ""))
+    path_start_re = re.compile(r"(?i)(?:[A-Za-z]:[\\/]|\\\\|file:/+)")
+    parts = []
+    pos = 0
+    while pos < len(raw):
+        match = path_start_re.search(raw, pos)
+        if not match:
+            parts.append(_escape_plain_text_with_soft_breaks(raw[pos:]))
+            break
+        parts.append(_escape_plain_text_with_soft_breaks(raw[pos:match.start()]))
+        local_link = _find_local_link_in_text(raw, match.start())
+        if not local_link:
+            parts.append(_escape_plain_text_with_soft_breaks(raw[match.start():match.end()]))
+            pos = match.end()
+            continue
+        display_text, path, link_end = local_link
+        href = html.escape(_local_href_for_path(path), quote=True)
+        label = _soft_break_escaped_token(display_text)
+        parts.append(f'<a href="{href}">{label}</a>')
+        pos = link_end
     return "".join(parts)
 
 def _clean_href(value):
     href = html.unescape(str(value or "")).replace("\u200b", "").strip()
     return href
 
-def _normalize_href(value):
+def _strip_href_wrappers(value):
     href = _clean_href(value)
+    if len(href) >= 2 and href[0] == "<" and href[-1] == ">":
+        href = href[1:-1].strip()
+    return href
+
+def _normalize_href(value):
+    href = _strip_href_wrappers(value)
     return f"https://{href}" if href.startswith("www.") else href
+
+def _looks_like_windows_abs_path(value):
+    value = str(value or "")
+    return bool(
+        re.match(r"^[A-Za-z]:[\\/]", value) or
+        re.match(r"^[\\/]{2}[^\\/]+[\\/][^\\/]+", value)
+    )
+
+def _clean_local_path(value):
+    path = urllib.parse.unquote(str(value or "")).strip()
+    if re.match(r"^/[A-Za-z]:[\\/]", path):
+        path = path[1:]
+    if not (_looks_like_windows_abs_path(path) or os.path.isabs(path)):
+        return ""
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+
+def _local_path_from_href(value):
+    href = _strip_href_wrappers(value)
+    if not href:
+        return ""
+    decoded = urllib.parse.unquote(href)
+    if _looks_like_windows_abs_path(decoded):
+        return _clean_local_path(decoded)
+    if not href.lower().startswith("file:"):
+        return ""
+    url_path = ""
+    try:
+        url_path = QUrl(href).toLocalFile()
+    except Exception:
+        url_path = ""
+    if not url_path:
+        parsed = urllib.parse.urlparse(href)
+        netloc = urllib.parse.unquote(parsed.netloc or "")
+        path_part = urllib.parse.unquote(parsed.path or "")
+        url_path = f"//{netloc}{path_part}" if netloc and path_part else path_part
+    return _clean_local_path(url_path)
+
+def _is_safe_local_link_path(path):
+    path = str(path or "")
+    if not path or not os.path.exists(path):
+        return False
+    if os.path.isfile(path) and os.path.splitext(path)[1].lower() in EXECUTABLE_OPEN_EXTENSIONS:
+        return False
+    return True
+
+def _local_href_for_path(path):
+    try:
+        return bytes(QUrl.fromLocalFile(path).toEncoded()).decode("ascii")
+    except Exception:
+        return "file:///" + urllib.parse.quote(str(path).replace("\\", "/"), safe="/:")
+
+def _canonical_display_href(value):
+    href = _normalize_href(value)
+    local_path = _local_path_from_href(href)
+    if _is_safe_local_link_path(local_path):
+        return _local_href_for_path(local_path)
+    return href
+
+def _display_label_for_href(value):
+    local_path = _local_path_from_href(value)
+    if local_path:
+        return os.path.basename(local_path.rstrip("\\/")) or local_path
+    return value
 
 def _is_valid_display_href(value):
     href = _normalize_href(value)
     if not href or href in {"#", "about:blank"}:
         return False
+    if _is_safe_local_link_path(_local_path_from_href(href)):
+        return True
     parsed = urllib.parse.urlparse(href)
     return parsed.scheme.lower() in {"http", "https", "mailto"} and bool(parsed.netloc or parsed.scheme == "mailto")
 
 def _repair_markdown_links(text):
     def repl(match):
         label = str(match.group(1) or "").strip()
-        href = _normalize_href(match.group(2))
+        href = _canonical_display_href(match.group(2))
         if not _is_valid_display_href(href):
             return label
-        return f"[{label or href}]({href})"
+        return f"[{label or _display_label_for_href(href)}]({href})"
     return re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
 
 def _sanitize_rendered_links(rendered_html, link_color=None):
@@ -70,11 +197,11 @@ def _sanitize_rendered_links(rendered_html, link_color=None):
 
     def repl(match):
         quote = match.group(1)
-        href = _normalize_href(match.group(2))
+        href = _canonical_display_href(match.group(2))
         inner = match.group(3) or ""
         if not _is_valid_display_href(href):
             return inner
-        display_inner = inner.strip() or html.escape(href)
+        display_inner = inner.strip() or html.escape(_display_label_for_href(href))
         return f'<a href={quote}{html.escape(href, quote=True)}{quote}{style}>{display_inner}</a>'
     rendered_html = re.sub(r'<a\s+[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', repl, str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
     rendered_html = re.sub(r'<a\s+[^>]*href\s*=\s*[^>]*>\s*</a>', '', rendered_html, flags=re.IGNORECASE | re.DOTALL)
@@ -262,10 +389,10 @@ def _style_markdown_blocks(rendered_html, is_user=False, code_blocks=None):
     return html_text
 
 def _soft_break_rendered_text(rendered_html):
-    segments = re.split(r"(<pre\b.*?</pre>)", str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
+    segments = re.split(r"(<pre\b.*?</pre>|<a\b.*?</a>|<code\b.*?</code>)", str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
     rendered = []
     for segment in segments:
-        if re.match(r"<pre\b", segment or "", flags=re.IGNORECASE):
+        if re.match(r"<(?:pre|a|code)\b", segment or "", flags=re.IGNORECASE):
             rendered.append(segment)
             continue
         parts = re.split(r"(<[^>]+>)", segment)
@@ -503,6 +630,12 @@ def _open_attachment_path(path):
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         return True
     return False
+
+def _open_local_link_path(path):
+    path = _clean_local_path(path)
+    if not _is_safe_local_link_path(path):
+        return False
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
 def _attachment_icon_text(item):
     kind = str(item.get("kind", "document") or "document")
@@ -829,6 +962,11 @@ class MessageBubble(QFrame):
                 logging.warning(f"Copy code block failed: {e}")
             return
         href = _normalize_href(href)
+        local_path = _local_path_from_href(href)
+        if local_path:
+            if not _open_local_link_path(local_path):
+                QMessageBox.warning(self, "Local link unavailable", f"Could not open:\n{local_path}")
+            return
         if _is_valid_display_href(href):
             webbrowser.open(href)
 
