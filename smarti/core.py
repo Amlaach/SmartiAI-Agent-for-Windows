@@ -9,6 +9,7 @@ from .attachments import *
 from .api_errors import (
     ApiRequestError,
     analyze_api_error,
+    api_technical_details,
     api_retry_exhausted_analysis,
     api_retry_status_message,
 )
@@ -5029,6 +5030,13 @@ CWD: {current_dir}
         if is_error:
             raise ApiRequestError(analyze_api_error(self.mode, current_model, response=response))
 
+    def _api_error_user_response(self, analysis):
+        message = str(getattr(analysis, "user_message", "") or "התקבלה שגיאת API.").strip()
+        details = redact_sensitive_text(api_technical_details(analysis), self.settings)
+        if details:
+            return f"ERROR_USER: {message}\nפרטים טכניים: {details}"
+        return f"ERROR_USER: {message}"
+
     def _handle_api_request_with_retry(self, current_model, current_messages, retry_wait_times=None):
         retries = 0
         immediate_retries = 0
@@ -5565,7 +5573,7 @@ CWD: {current_dir}
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
                     elif isinstance(e, ApiRequestError):
-                        final_response = f"ERROR_USER: {e.analysis.user_message}"
+                        final_response = self._api_error_user_response(e.analysis)
                     elif self._is_budget_exception(e):
                         final_response = self._budget_exception_user_message(e)
                     elif "RATE_LIMIT_ABORTED" in str(e):
@@ -5805,7 +5813,7 @@ CWD: {current_dir}
                 final_response = self._budget_exception_user_message(e)
                 return final_response
             if isinstance(e, ApiRequestError):
-                final_response = f"ERROR_USER: {e.analysis.user_message}"
+                final_response = self._api_error_user_response(e.analysis)
                 return final_response
             logging.exception("Agent loop crashed unexpectedly inside send_message.")
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"

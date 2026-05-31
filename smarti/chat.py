@@ -280,6 +280,19 @@ def _clean_step_for_display(text):
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean
 
+def _split_technical_details(text):
+    main_lines = []
+    detail_lines = []
+    for line in str(text or "").splitlines():
+        clean = line.strip()
+        if clean.startswith("פרטים טכניים:"):
+            detail_lines.append(clean)
+        else:
+            main_lines.append(line)
+    main_text = "\n".join(main_lines).strip()
+    detail_text = " ".join(detail_lines).strip()
+    return main_text, detail_text
+
 class PillInputFrame(QFrame):
     CORNER_RADIUS = 40.5
 
@@ -866,6 +879,15 @@ class MessageBubble(QFrame):
         label.setText(rendered_html)
         return label
 
+    def _technical_details_html(self, details):
+        safe_details = _escape_with_soft_breaks(details)
+        return (
+            f'<div dir="rtl" align="right" style="color:{MUTED_TEXT_COLOR}; '
+            'font-size:12px; font-style:italic; line-height:1.35; '
+            'margin-top:8px; padding-top:2px;">'
+            f'{safe_details}</div>'
+        )
+
     def add_step(self, step_text):
         display_step = _clean_step_for_display(str(step_text or "").replace('\n', ' '))
         if "{" in display_step and "}" in display_step:
@@ -884,16 +906,19 @@ class MessageBubble(QFrame):
     def set_final_text(self, final_text):
         if not final_text: return
         display_text = _repair_markdown_links(html.unescape(str(final_text)))
+        render_text, technical_details = _split_technical_details(display_text)
         self.copy_text = display_text
         self.code_blocks = []
         self.stop_steps_shimmer()
         self._clear_final_layout()
         self.final_content.show()
         self._add_attachment_widgets()
-        parts = _split_markdown_code_blocks(display_text)
+        parts = _split_markdown_code_blocks(render_text)
         has_code = any(kind == "code" for kind, _, _ in parts)
         if not has_code:
-            rendered_html = self._render_markdown_segment(display_text)
+            rendered_html = self._render_markdown_segment(render_text)
+            if technical_details:
+                rendered_html = f"{rendered_html}{self._technical_details_html(technical_details)}"
             self.final_label.setMaximumWidth(self.max_w)
             self.final_label.setText(rendered_html if rendered_html.lstrip().startswith("<") else f"<span>{rendered_html}</span>")
             self.final_label.show()
@@ -908,6 +933,8 @@ class MessageBubble(QFrame):
                     rendered_html = self._render_markdown_segment(content)
                     if rendered_html.strip():
                         self.final_layout.addWidget(self._new_text_label(rendered_html))
+            if technical_details:
+                self.final_layout.addWidget(self._new_text_label(self._technical_details_html(technical_details)))
         if self.steps_text_html: self.collapse_steps()
         self._refresh_layout()
 

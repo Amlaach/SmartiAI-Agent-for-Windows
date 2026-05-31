@@ -302,12 +302,14 @@ def _technical_summary(status_code, fields, class_name):
 
 
 def _classify(status_code, blob, retry_after):
-    hard_billing = _contains_any(blob, (
+    account_billing = _contains_any(blob, (
         "insufficient_quota", "insufficient quota", "insufficient credits", "insufficient credit",
         "insufficient balance", "out of balance", "balance too low", "run out of credits",
         "no credits", "billing", "payment", "monthly spend", "spending limit", "top up",
-        "credit balance", "quota has been exceeded", "current quota", "per day", "daily quota",
-        "rpd", "free_tier", "余额", "充值", "余额已用完",
+        "credit balance", "free_tier", "余额", "充值", "余额已用完",
+    ))
+    quota_exhausted = _contains_any(blob, (
+        "quota has been exceeded", "current quota", "per day", "daily quota", "rpd",
     ))
     auth_terms = (
         "authentication", "unauthorized", "incorrect api key", "invalid api key", "invalid_api_key",
@@ -365,7 +367,7 @@ def _classify(status_code, blob, retry_after):
         return "permission", "none"
     if status_code == 402:
         return "billing_quota", "none"
-    if hard_billing and not (status_code == 429 and retry_after):
+    if account_billing or (quota_exhausted and not (status_code == 429 and retry_after)):
         return "billing_quota", "none"
     if status_code == 413 or _contains_any(blob, too_large_terms):
         return "request_too_large", "none"
@@ -467,6 +469,31 @@ def api_retry_exhausted_analysis(analysis, wait_too_long=False):
     else:
         message = analysis.user_message
     return replace(analysis, retry_action="none", user_message=message)
+
+
+def api_technical_details(analysis, limit=420):
+    if not analysis:
+        return ""
+    parts = [
+        analysis.provider_label,
+        f"category={analysis.category}",
+        f"retry={analysis.retry_action}",
+    ]
+    if analysis.model:
+        parts.insert(1, f"model={analysis.model}")
+    if analysis.retry_after is not None and analysis.category in {"rate_limit", "server_overload", "timeout", "network"}:
+        try:
+            parts.append(f"retry_after={int(round(float(analysis.retry_after)))}s")
+        except Exception:
+            parts.append(f"retry_after={analysis.retry_after}")
+    if analysis.technical_summary:
+        parts.append(analysis.technical_summary)
+    if analysis.request_id:
+        parts.append(f"request_id={analysis.request_id}")
+    compact = re.sub(r"\s+", " ", " | ".join(str(part or "").strip() for part in parts if str(part or "").strip())).strip()
+    if len(compact) > limit:
+        compact = compact[:limit].rstrip() + "..."
+    return compact
 
 
 def api_validation_message(analysis):
