@@ -677,6 +677,8 @@ class DirectoryPicker(QWidget):
 
 class ExpandingTextEdit(QTextEdit):
     send_signal = pyqtSignal()
+    files_pasted = pyqtSignal(list)
+    image_pasted = pyqtSignal(object)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._is_aligning = False
@@ -808,6 +810,31 @@ class ExpandingTextEdit(QTextEdit):
             self.setTextCursor(cursor)
         else:
             super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source):
+        handled_attachment = False
+        try:
+            if source.hasUrls():
+                paths = []
+                for url in source.urls():
+                    if url.isLocalFile():
+                        path = url.toLocalFile()
+                        if path and os.path.isfile(path):
+                            paths.append(path)
+                if paths:
+                    self.files_pasted.emit(paths)
+                    handled_attachment = True
+            if source.hasImage():
+                image = source.imageData()
+                if isinstance(image, QImage) and not image.isNull():
+                    self.image_pasted.emit(image)
+                    handled_attachment = True
+        except Exception as e:
+            logging.warning(f"Paste attachment handling failed: {e}")
+        if source.hasText() and not handled_attachment:
+            super().insertFromMimeData(source)
+        elif not handled_attachment:
+            super().insertFromMimeData(source)
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

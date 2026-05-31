@@ -1,5 +1,6 @@
 """Chat bubbles, notifications, main window, and splash screen."""
 from .common import *
+from .attachments import *
 from .ui_styles import *
 from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
@@ -486,8 +487,203 @@ class CodeBlockWidget(QFrame):
         except Exception as e:
             QMessageBox.warning(self, "שגיאה בשמירת קוד", str(e))
 
+def _open_attachment_path(path):
+    path = os.path.abspath(str(path or "").strip(' "\''))
+    if path and os.path.exists(path):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        return True
+    return False
+
+def _attachment_icon_text(item):
+    kind = str(item.get("kind", "document") or "document")
+    ext = os.path.splitext(str(item.get("name") or item.get("path") or ""))[1].upper().lstrip(".")
+    if kind == "image":
+        return "IMG"
+    if kind == "video":
+        return "VID"
+    if kind == "audio":
+        return "AUD"
+    return ext[:4] or "DOC"
+
+def _set_button_icon_or_text(button, icon_names, fallback_text="", icon_size=20):
+    icon = _asset_icon(*icon_names)
+    if not icon.isNull():
+        button.setIcon(icon)
+        button.setIconSize(QSize(icon_size, icon_size))
+        button.setText("")
+    else:
+        button.setIcon(QIcon())
+        button.setText(fallback_text)
+
+class AttachmentTile(QFrame):
+    remove_requested = pyqtSignal(object)
+
+    def __init__(self, attachment, removable=False, compact=False):
+        super().__init__()
+        self.attachment = normalize_attachment(attachment) or {}
+        self.removable = bool(removable)
+        self.compact = bool(compact)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._is_image = self.attachment.get("kind") == "image"
+        if self._is_image:
+            self._build_image_tile()
+        else:
+            self._build_file_tile()
+
+    def _remove_button(self, size=22):
+        btn = QPushButton()
+        btn.setFixedSize(size, size)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setToolTip("הסר קובץ")
+        btn.setStyleSheet(
+            "QPushButton { background: rgba(0,0,0,180); color: white; border: none; "
+            f"border-radius: {size // 2}px; padding: 0px; font-weight: 800; }}"
+            "QPushButton:hover { background: rgba(0,0,0,220); }"
+        )
+        _set_button_icon_or_text(btn, ("attachment_remove_icon", "remove_attachment_icon", "close_icon", "x_icon"), "X", max(12, size - 8))
+        btn.clicked.connect(lambda: self.remove_requested.emit(self.attachment))
+        return btn
+
+    def _build_image_tile(self):
+        path = self.attachment.get("path", "")
+        pixmap = QPixmap(path) if os.path.exists(path) else QPixmap()
+        if self.removable:
+            side = 68
+            self.setFixedSize(side, side)
+            self.setStyleSheet("AttachmentTile { background: transparent; border: none; }")
+            layout = QGridLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            label = QLabel()
+            label.setFixedSize(side, side)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet(f"background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; border-radius: 14px;")
+            if not pixmap.isNull():
+                label.setPixmap(pixmap.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation))
+            else:
+                label.setText("IMG")
+            layout.addWidget(label, 0, 0)
+            layout.addWidget(self._remove_button(22), 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+            return
+
+        max_w = max(180, min(360, self.maximumWidth() if self.maximumWidth() < 16777215 else 320))
+        if pixmap.isNull():
+            width, height = 220, 140
+        else:
+            width = min(max_w, max(180, pixmap.width()))
+            height = max(90, int(width * pixmap.height() / max(1, pixmap.width())))
+        self.setFixedSize(width, height)
+        self.setStyleSheet("AttachmentTile { background: transparent; border: none; }")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel()
+        label.setFixedSize(width, height)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("background: transparent; border: none;")
+        if not pixmap.isNull():
+            label.setPixmap(pixmap.scaled(width, height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            label.setText("IMG")
+        layout.addWidget(label)
+
+    def _build_file_tile(self):
+        self.setMinimumWidth(270 if self.compact else 300)
+        self.setMaximumWidth(430)
+        self.setFixedHeight(68 if self.compact else 72)
+        self.setStyleSheet(
+            f"AttachmentTile {{ background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; "
+            f"border-radius: 12px; }}"
+            f"QLabel {{ background: transparent; color: {TEXT_COLOR}; }}"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 9, 10, 9)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._preview_widget(), 0, Qt.AlignmentFlag.AlignTop)
+
+        info = QVBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(3)
+        name = QLabel(str(self.attachment.get("name") or os.path.basename(self.attachment.get("path", "")) or "קובץ"))
+        name.setWordWrap(True)
+        name.setMaximumWidth(250 if self.compact else 300)
+        name.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 800;")
+        info.addWidget(name)
+        meta = QLabel(f"File · {human_file_size(self.attachment.get('size'))}")
+        meta.setStyleSheet(muted_label_css(12))
+        info.addWidget(meta)
+        layout.addLayout(info, 1)
+        if self.removable:
+            layout.addWidget(self._remove_button(22), 0, Qt.AlignmentFlag.AlignTop)
+
+    def _preview_widget(self):
+        label = QLabel(_attachment_icon_text(self.attachment))
+        label.setFixedSize(50, 50)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(
+            f"background: {MUTED_TEXT_COLOR}; color: {FIELD_COLOR}; border: none; "
+            f"border-radius: 10px; font-size: 11px; font-weight: 800;"
+        )
+        icon = _asset_icon("file_attachment_icon", "attachment_file_icon", "file_icon")
+        if not icon.isNull():
+            label.setPixmap(icon.pixmap(28, 28))
+        return label
+
+    def open_attachment(self):
+        if not _open_attachment_path(self.attachment.get("path", "")):
+            QMessageBox.warning(self, "קובץ לא נמצא", "הקובץ המצורף לא נמצא במיקום המקומי שלו.")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.open_attachment()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+class AttachmentPreviewStrip(QWidget):
+    remove_requested = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet("background: transparent;")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setFixedHeight(82)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        self.content = QWidget()
+        self.content.setStyleSheet("background: transparent;")
+        self.layout = QHBoxLayout(self.content)
+        self.layout.setContentsMargins(4, 4, 4, 4)
+        self.layout.setSpacing(8)
+        self.layout.addStretch()
+        self.scroll.setWidget(self.content)
+        outer.addWidget(self.scroll)
+        self.hide()
+
+    def set_attachments(self, attachments):
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        attachments = normalize_attachments(attachments)
+        for item in attachments:
+            tile = AttachmentTile(item, removable=True, compact=True)
+            tile.remove_requested.connect(self.remove_requested.emit)
+            self.layout.addWidget(tile)
+        self.layout.addStretch()
+        self.setVisible(bool(attachments))
+
+# Google Drive picker UI is parked until OAuth sign-in is reworked.
+
 class MessageBubble(QFrame):
-    def __init__(self, text, is_user=False, parent_width=450):
+    def __init__(self, text, is_user=False, parent_width=450, attachments=None):
         super().__init__()
         self.is_user = is_user
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
@@ -495,6 +691,7 @@ class MessageBubble(QFrame):
         self.main_layout.setContentsMargins(20, 16, 20, 16)
         self.max_w = int(parent_width * 0.76) - 30
         self.copy_text = str(text or "")
+        self.attachments = normalize_attachments(attachments or [])
         self.code_blocks = []
         
         self.steps_container = QWidget()
@@ -540,8 +737,15 @@ class MessageBubble(QFrame):
         self.steps_text_html = ""
         self.is_expanded = True 
         
-        if text: self.set_final_text(text)
-        else: self.final_label.hide()
+        if text:
+            self.set_final_text(text)
+        elif self.attachments:
+            self._clear_final_layout()
+            self._add_attachment_widgets()
+            self.final_content.show()
+            self.final_label.hide()
+        else:
+            self.final_label.hide()
         self.apply_theme()
 
     def _link_color(self):
@@ -587,6 +791,8 @@ class MessageBubble(QFrame):
         self.final_label.setMaximumWidth(self.max_w)
         for block in self.findChildren(CodeBlockWidget):
             block.update_parent_width(self.max_w)
+        for tile in self.findChildren(AttachmentTile):
+            tile.setMaximumWidth(self.max_w)
         self._refresh_layout()
 
     def _refresh_layout(self):
@@ -617,6 +823,12 @@ class MessageBubble(QFrame):
                 widget.setParent(None)
                 if widget is not self.final_label:
                     widget.deleteLater()
+
+    def _add_attachment_widgets(self):
+        for item in self.attachments:
+            tile = AttachmentTile(item, removable=False, compact=False)
+            tile.setMaximumWidth(self.max_w)
+            self.final_layout.addWidget(tile)
 
     def _render_markdown_segment(self, segment):
         text = str(segment or "").strip("\n")
@@ -672,6 +884,7 @@ class MessageBubble(QFrame):
         self.stop_steps_shimmer()
         self._clear_final_layout()
         self.final_content.show()
+        self._add_attachment_widgets()
         parts = _split_markdown_code_blocks(display_text)
         has_code = any(kind == "code" for kind, _, _ in parts)
         if not has_code:
@@ -715,18 +928,20 @@ class MessageBubble(QFrame):
         self.steps_label.stop_shimmer()
 
     def plain_text(self):
-        return self.copy_text or self.final_label.text() or self.steps_label.text()
+        attachment_text = attachment_manifest_text(self.attachments)
+        base = self.copy_text or self.final_label.text() or self.steps_label.text()
+        return (str(base or "") + ("\n\n" + attachment_text if attachment_text else "")).strip()
 
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
-    def __init__(self, text, is_user=False, parent_width=450, show_actions=True):
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None):
         super().__init__()
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setStyleSheet("background: transparent;")
-        self.bubble = MessageBubble(text, is_user, parent_width)
+        self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments)
         self.is_user = is_user
         self.show_actions = bool(show_actions)
         self._tts_active = False
@@ -1353,6 +1568,7 @@ class ChatWindow(QMainWindow):
         self.tts_active = False
         self.tts_thread = None
         self._tts_workers = []
+        self.pending_attachments = []
         
         icon_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(icon_path):
@@ -1490,7 +1706,24 @@ class ChatWindow(QMainWindow):
         self.send_icon = _asset_icon("send_icon")
         self.stop_agent_icon = _asset_icon("stop_agent_icon")
         self._set_menu_button_icon()
+        self._set_attach_button_icon()
         self._refresh_menu_action_icons()
+
+    def _set_attach_button_icon(self):
+        if not hasattr(self, "attach_btn"):
+            return
+        _set_button_icon_or_text(
+            self.attach_btn,
+            ("attachment_add_icon", "attach_icon", "add_attachment_icon", "plus_icon"),
+            "+",
+            24,
+        )
+        self.attach_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {TEXT_COLOR}; border: none; "
+            f"border-radius: 21px; padding: 0px; font-size: 28px; font-weight: 300; }}"
+            f"QPushButton:hover {{ color: {ACCENT_COLOR}; background: transparent; }}"
+            f"QPushButton:pressed {{ color: {ACCENT_SECONDARY_COLOR}; background: transparent; }}"
+        )
 
     def apply_theme(self, mode=None, refresh_messages=True):
         apply_app_theme(QApplication.instance(), mode=mode, settings=self.core.settings)
@@ -1525,6 +1758,10 @@ class ChatWindow(QMainWindow):
             apply_soft_shadow(self.input_frame, blur=42, y=12, alpha=42)
         if hasattr(self, "input_field"):
             self.input_field.setStyleSheet(self._chat_input_stylesheet())
+        if hasattr(self, "attach_btn"):
+            self._set_attach_button_icon()
+        if hasattr(self, "attach_menu"):
+            self.attach_menu.setStyleSheet(menu_stylesheet())
         if hasattr(self, "logo_lbl"):
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
@@ -1683,16 +1920,35 @@ class ChatWindow(QMainWindow):
         self.input_frame.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.input_frame.apply_theme()
         apply_soft_shadow(self.input_frame, blur=42, y=12, alpha=42)
-        input_frame_layout = QHBoxLayout(self.input_frame)
+        input_frame_layout = QVBoxLayout(self.input_frame)
         input_frame_layout.setContentsMargins(10, 8, 12, 8)
-        input_frame_layout.setSpacing(8)
+        input_frame_layout.setSpacing(4)
+
+        self.attachment_preview = AttachmentPreviewStrip()
+        self.attachment_preview.remove_requested.connect(self.remove_pending_attachment)
+        input_frame_layout.addWidget(self.attachment_preview)
+
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(8)
 
         self.input_field = ExpandingTextEdit()
         self.input_field.setPlaceholderText("הודעה")
         self.input_field.setStyleSheet(self._chat_input_stylesheet())
         self.input_field.textChanged.connect(self.on_text_change)
         self.input_field.send_signal.connect(self.send_text)
-        input_frame_layout.addWidget(self.input_field, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.input_field.files_pasted.connect(self.add_attachment_paths)
+        self.input_field.image_pasted.connect(self.add_pasted_image)
+        input_row.addWidget(self.input_field, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.attach_btn = QPushButton("+")
+        self.attach_btn.setFixedSize(42, 42)
+        self.attach_btn.setToolTip("הוספת קבצים")
+        self.attach_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._set_attach_button_icon()
+        # Google Drive upload is parked for now; the plus button opens the local file picker directly.
+        self.attach_btn.clicked.connect(self.choose_local_attachments)
+        input_row.addWidget(self.attach_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
         
         self.action_btn = QPushButton()
         self.action_btn.setFixedSize(52, 52)
@@ -1701,7 +1957,8 @@ class ChatWindow(QMainWindow):
         self.refresh_themed_icons()
         self.update_action_btn_visuals()
         self.action_btn_host = PinnedActionButtonHost(self.action_btn)
-        input_frame_layout.insertWidget(0, self.action_btn_host, 0)
+        input_row.insertWidget(0, self.action_btn_host, 0)
+        input_frame_layout.addLayout(input_row)
         
         # Keep the action button visually on the left even inside the RTL chat.
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -1904,6 +2161,83 @@ class ChatWindow(QMainWindow):
 
     def show_menu(self): self.menu.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height())))
 
+    def show_attachment_menu(self):
+        # Kept as a compatibility shim for older signal wiring; no menu is shown.
+        self.choose_local_attachments()
+
+    def _active_attachment_dir(self):
+        try:
+            session = self.core.active_chat_session() or {}
+            return attachment_cache_dir(session.get("id", "current"))
+        except Exception:
+            return attachment_cache_dir("current")
+
+    def add_attachment_paths(self, paths):
+        new_items = []
+        for path in paths or []:
+            item = attachment_from_path(path, source="local")
+            if item:
+                new_items.append(item)
+        if not new_items:
+            return
+        self.pending_attachments = merge_conversation_attachments(self.pending_attachments, new_items, 30)
+        self.refresh_pending_attachments()
+
+    def add_pasted_image(self, image):
+        try:
+            if image is None or image.isNull():
+                return
+            directory = self._active_attachment_dir()
+            path = os.path.join(directory, f"pasted-{int(time.time())}-{uuid.uuid4().hex[:6]}.png")
+            os.makedirs(directory, exist_ok=True)
+            if image.save(path, "PNG"):
+                item = attachment_from_path(path, source="clipboard", original_name=os.path.basename(path))
+                if item:
+                    self.pending_attachments = merge_conversation_attachments(self.pending_attachments, [item], 30)
+                    self.refresh_pending_attachments()
+        except Exception as e:
+            QMessageBox.warning(self, "שגיאה בהדבקת תמונה", str(e))
+
+    def remove_pending_attachment(self, attachment):
+        item = normalize_attachment(attachment)
+        if not item:
+            return
+        remove_id = item.get("id")
+        remove_path = item.get("path", "").lower()
+        self.pending_attachments = [
+            current for current in normalize_attachments(self.pending_attachments)
+            if current.get("id") != remove_id and current.get("path", "").lower() != remove_path
+        ]
+        self.refresh_pending_attachments()
+
+    def refresh_pending_attachments(self):
+        self.pending_attachments = normalize_attachments(self.pending_attachments)
+        if hasattr(self, "attachment_preview"):
+            self.attachment_preview.set_attachments(self.pending_attachments)
+        self.update_action_btn_visuals()
+        QTimer.singleShot(0, self._update_chat_bottom_padding)
+
+    def choose_local_attachments(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "הוסף תמונות וקבצים",
+            os.path.expanduser("~"),
+            "All files (*.*)"
+        )
+        self.add_attachment_paths(paths)
+
+    def _show_drive_setup_message(self, text, offer_settings=True):
+        # Google Drive upload is parked until OAuth sign-in is reworked.
+        return
+
+    def ensure_google_drive_connected(self):
+        # Google Drive upload is parked until OAuth sign-in is reworked.
+        return False
+
+    def choose_drive_attachments(self):
+        # Google Drive upload is parked until OAuth sign-in is reworked.
+        return
+
     def update_action_btn_visuals(self):
         try: self.action_btn.clicked.disconnect()
         except: pass
@@ -1925,7 +2259,7 @@ class ChatWindow(QMainWindow):
             self.action_btn.clicked.connect(self.cancel_agent)
         else:
             self.action_btn.setToolTip("")
-            has_text = bool(self.input_field.toPlainText().strip())
+            has_text = bool(self.input_field.toPlainText().strip()) or bool(getattr(self, "pending_attachments", []))
             target_icon = self.send_icon if has_text else self.mic_icon
             fallback_text = "שלח" if has_text else "קול"
             
@@ -1965,10 +2299,11 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True):
-        if not text and is_user: return
+    def add_message(self, text, is_user, show_actions=True, attachments=None):
+        attachments = normalize_attachments(attachments or [])
+        if not text and is_user and not attachments: return
         available_width = self.scroll.viewport().width() or self.width()
-        container = ChatMessageContainer(text, is_user, available_width, show_actions=show_actions)
+        container = ChatMessageContainer(text, is_user, available_width, show_actions=show_actions, attachments=attachments)
         self._wire_message_container(container)
         self.chat_layout.addWidget(container)
         QTimer.singleShot(0, container.start_entry_animation)
@@ -1978,11 +2313,14 @@ class ChatWindow(QMainWindow):
 
     def send_text(self):
         text = self.input_field.toPlainText().strip()
-        if not text: return
+        attachments = normalize_attachments(getattr(self, "pending_attachments", []))
+        if not text and not attachments: return
         self.input_field.clear()
+        self.pending_attachments = []
+        self.refresh_pending_attachments()
         self.core.stop_speaking() 
-        self.add_message(text, is_user=True)
-        self.process_request(text)
+        self.add_message(text, is_user=True, attachments=attachments)
+        self.process_request(text, attachments=attachments)
 
     def trigger_voice_from_hotkey(self):
         if not self.agent_running: QTimer.singleShot(0, self.start_voice)
@@ -2005,7 +2343,7 @@ class ChatWindow(QMainWindow):
             self.add_message(text, is_user=True)
             self.process_request(text, is_voice=True)
 
-    def process_request(self, text, is_voice=False):
+    def process_request(self, text, is_voice=False, attachments=None):
         self.current_request_is_voice = is_voice
         self.status_lbl.setText("חושב...")
         self.input_field.setEnabled(False)
@@ -2019,7 +2357,7 @@ class ChatWindow(QMainWindow):
         self.chat_layout.addWidget(self.current_agent_container)
         self.current_agent_container.hide() 
         
-        self.agent_thread = AgentWorker(self.core, text)
+        self.agent_thread = AgentWorker(self.core, text, attachments=attachments)
         self.agent_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
         self.agent_thread.ask_confirm_signal.connect(self.show_confirm_dialog) 
         self.agent_thread.api_key_required_signal.connect(self.show_api_key_dialog)
@@ -2114,9 +2452,11 @@ class ChatWindow(QMainWindow):
         for message in messages:
             role = message.get("role")
             content = str(message.get("content", "") or "")
-            if role not in {"user", "assistant"} or not content.strip():
+            metadata = message.get("metadata", {}) if isinstance(message.get("metadata", {}), dict) else {}
+            attachments = normalize_attachments(metadata.get("attachments", []))
+            if role not in {"user", "assistant"} or (not content.strip() and not attachments):
                 continue
-            self.add_message(content, is_user=(role == "user"), show_actions=True)
+            self.add_message(content, is_user=(role == "user"), show_actions=True, attachments=attachments)
         self.refresh_chat_title()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 

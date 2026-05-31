@@ -867,6 +867,8 @@ class SettingsPage(QWidget):
         self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
         self._update_provider_key_help()
         self.local_url = QLineEdit(self.core.settings.get("local_server_url", "http://localhost:1234/v1"))
+
+        # Google Drive settings UI is parked until OAuth sign-in is reworked.
         
         self.permission_combo = SegmentedControl()
         self.permission_combo.addItems(["בטוח", "מאוזן", "אוטונומי"])
@@ -1186,6 +1188,7 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.computer_control_cb, tools, "מאפשר לסמארטי לקרוא את עץ הנגישות של Windows ולפעול על אלמנטים מזוהים. מקלדת/עכבר הם fallback מבוקר בלבד.")
         self._add_checkbox(self.mcp_cb, tools, "מאפשר שימוש בכלים חיצוניים שמרחיבים את יכולות סמארטי, בכפוף להרשאות שהוגדרו.")
         self._add_checkbox(self.skills_beta_cb, tools, "מאפשר שכבת Skills בטא: תהליכי עבודה גבוהים שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.")
+        # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
         self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.")
         self._add_field("סיסמת אפליקציה לאימייל", self.pwd, tools, "סיסמת אפליקציה ייעודית לחשבון האימייל. אל תשתמש בסיסמה הראשית של החשבון.")
@@ -1329,6 +1332,18 @@ class SettingsPage(QWidget):
             self.model_combo.addItem(fallback)
         self._suppress_autosave = previous_suppress
         self._schedule_autosave()
+
+    def refresh_google_drive_status(self):
+        # Google Drive settings UI is parked until OAuth sign-in is reworked.
+        return
+
+    def connect_google_drive(self):
+        # Google Drive settings UI is parked until OAuth sign-in is reworked.
+        return
+
+    def disconnect_google_drive(self):
+        # Google Drive settings UI is parked until OAuth sign-in is reworked.
+        return
 
     def _register_autosave_handlers(self):
         combos = [self.provider_combo, self.model_combo]

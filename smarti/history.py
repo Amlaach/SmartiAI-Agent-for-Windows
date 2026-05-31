@@ -18,7 +18,13 @@ def _clean_title(value):
 def _message_text(message):
     if not isinstance(message, dict):
         return ""
-    return str(message.get("content", "") or "")
+    text = str(message.get("content", "") or "")
+    metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+    attachments = metadata.get("attachments", []) if isinstance(metadata.get("attachments"), list) else []
+    if attachments:
+        names = " ".join(str(item.get("name", "")) for item in attachments if isinstance(item, dict))
+        text = f"{text} {names}".strip()
+    return text
 
 
 def _preview_text(value, limit=170):
@@ -261,7 +267,7 @@ class ChatSessionStore:
             user_messages = [m for m in session.get("messages", []) if m.get("role") == "user"]
             return len(user_messages) == 0
 
-    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None):
+    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None):
         with self._lock:
             session = self._session_by_id(self.data.get("active_session_id"))
             if not session:
@@ -269,12 +275,13 @@ class ChatSessionStore:
                 self.data.setdefault("sessions", []).append(session)
                 self.data["active_session_id"] = session["id"]
             now = _now_iso()
-            if str(user_text or "").strip():
+            metadata = copy.deepcopy(user_metadata if isinstance(user_metadata, dict) else {})
+            if str(user_text or "").strip() or metadata.get("attachments"):
                 session.setdefault("messages", []).append({
                     "role": "user",
                     "content": str(user_text or ""),
                     "created_at": now,
-                    "metadata": {},
+                    "metadata": metadata,
                 })
             if str(assistant_text or "").strip():
                 metadata = {"is_error": bool(is_error)}

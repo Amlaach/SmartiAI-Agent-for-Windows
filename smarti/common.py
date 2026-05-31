@@ -6,6 +6,7 @@ import webbrowser
 import platform
 import shutil
 import urllib.parse
+import urllib.request
 import zipfile
 import threading
 import time
@@ -13,6 +14,10 @@ import glob
 import shlex
 import unicodedata
 import concurrent.futures
+import secrets
+import http.server
+import socketserver
+import socket
 import requests
 import re
 import logging
@@ -239,9 +244,9 @@ class SmartiCancelled(Exception):
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout,
                              QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
                              QScrollArea, QFrame, QMenu, QLineEdit,
-                             QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF
-from PyQt6.QtGui import QIcon, QFont, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage
+                             QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem, QAbstractItemView)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF, QUrl
+from PyQt6.QtGui import QIcon, QFont, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage, QDesktopServices
 
 DOCX_INSTALLED = importlib.util.find_spec("docx") is not None
 PDF_INSTALLED = importlib.util.find_spec("PyPDF2") is not None
@@ -301,6 +306,7 @@ CHAT_HISTORY_FILE = os.path.join(USER_DATA_DIR, "smarti_chats.json")
 TOOLS_DIR = os.path.join(USER_DATA_DIR, "custom_tools")
 MCP_TOOLS_DIR = os.path.join(USER_DATA_DIR, "mcp_tools")
 SKILLS_DIR = os.path.join(USER_DATA_DIR, "skills")
+ATTACHMENTS_DIR = os.path.join(USER_DATA_DIR, "attachments")
 ASSETS_DIR = SMARTI_RUNTIME.resource_path("assets")
 OUTPUTS_DIR = _resolve_default_outputs_dir()
 MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
@@ -329,7 +335,9 @@ MODEL_PROVIDER_SECRET_KEYS = {
 }
 
 SENSITIVE_SETTING_KEYS = MODEL_PROVIDER_SECRET_KEYS | {
-    "tavily_api_key", "email_password", "email_address"
+    "tavily_api_key", "email_password", "email_address",
+    "google_drive_client_id", "google_drive_client_secret",
+    "google_drive_refresh_token", "google_drive_access_token"
 }
 KEYRING_SERVICE = "SmartiAI"
 SECRET_PREFIX = "DPAPI:"
