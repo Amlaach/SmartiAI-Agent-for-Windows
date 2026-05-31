@@ -46,6 +46,7 @@ import urllib3
 
 from .runtime import SMARTI_RUNTIME
 from .ssl_compat import apply_insecure_ssl_compat
+from .api_errors import analyze_api_error, api_validation_message
 
 LITELLM_INSTALLED = importlib.util.find_spec("litellm") is not None
 KEYRING_INSTALLED = importlib.util.find_spec("keyring") is not None
@@ -692,9 +693,11 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
                 **kwargs,
             )
             if validation_response.status_code in {401, 403}:
-                return [], False, "המפתח נדחה על ידי הספק"
+                analysis = analyze_api_error(provider, response=validation_response)
+                return [], False, api_validation_message(analysis)
             if validation_response.status_code >= 400:
-                return [], False, f"בדיקת המפתח נכשלה ({validation_response.status_code})"
+                analysis = analyze_api_error(provider, response=validation_response)
+                return [], False, api_validation_message(analysis)
             if provider_config(provider).get("validation_path"):
                 model_response = requests.get(
                     _models_url_for_provider(provider, local_url),
@@ -712,10 +715,13 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
             models = _models_from_response(provider, response.json())
             return models or provider_fallback_models(provider), True, ""
         if response.status_code in {401, 403}:
-            return provider_fallback_models(provider), False, "המפתח נדחה על ידי הספק"
-        return provider_fallback_models(provider), False, f"טעינת המודלים נכשלה ({response.status_code})"
+            analysis = analyze_api_error(provider, response=response)
+            return provider_fallback_models(provider), False, api_validation_message(analysis)
+        analysis = analyze_api_error(provider, response=response)
+        return provider_fallback_models(provider), False, api_validation_message(analysis)
     except Exception as e:
-        return provider_fallback_models(provider), False, str(e)
+        analysis = analyze_api_error(provider, error=e)
+        return provider_fallback_models(provider), False, api_validation_message(analysis)
 
 def redact_sensitive_text(text, settings=None):
     if text is None: return ""

@@ -3,6 +3,12 @@ from .common import *
 from .config import *
 from .managers import *
 from .history import ChatSessionStore, DEFAULT_CHAT_TITLE
+from .api_errors import (
+    ApiRequestError,
+    analyze_api_error,
+    api_retry_exhausted_analysis,
+    api_retry_status_message,
+)
 
 # ==========================================
 # ליבת המערכת - SmartiCore
@@ -4971,8 +4977,18 @@ CWD: {current_dir}
         )
         return prompt + "\n" + safety_policy
 
+    def _raise_for_model_api_error(self, response, current_model):
+        status_code = getattr(response, "status_code", None)
+        try:
+            is_error = int(status_code) >= 400
+        except Exception:
+            is_error = False
+        if is_error:
+            raise ApiRequestError(analyze_api_error(self.mode, current_model, response=response))
+
     def _handle_api_request_with_retry(self, current_model, current_messages, retry_wait_times=None):
         retries = 0
+        immediate_retries = 0
         wait_times = [15, 30, 30] if retry_wait_times is None else list(retry_wait_times)
         max_retries = len(wait_times)
         while retries <= max_retries:
@@ -4997,8 +5013,7 @@ CWD: {current_dir}
                             timeout=120
                         )
                     )
-                    if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
-                    response.raise_for_status()
+                    self._raise_for_model_api_error(response, current_model)
                     data = response.json()
                     usage = data.get('usageMetadata', {})
                     usage_dict = {'prompt': usage.get('promptTokenCount', 0), 'completion': usage.get('candidatesTokenCount', 0), 'total': usage.get('totalTokenCount', 0)}
@@ -5032,33 +5047,47 @@ CWD: {current_dir}
                     response = self._run_cancelable_callable(
                         lambda: self._request_post(url, json=payload, headers=headers, timeout=120)
                     )
-                    if response.status_code in [429, 500, 502, 503, 504]: raise Exception(f"SERVER_OVERLOAD_{response.status_code}")
-                    response.raise_for_status()
+                    self._raise_for_model_api_error(response, current_model)
                     resp_data = response.json()
                     usage = resp_data.get('usage', {})
                     usage_dict = {'prompt': usage.get('input_tokens', 0), 'completion': usage.get('output_tokens', 0), 'total': usage.get('input_tokens', 0) + usage.get('output_tokens', 0)}
                     return resp_data["content"][0]["text"].strip(), usage_dict
             except SmartiCancelled:
                 raise Exception("CANCELLED_BY_USER")
-            except requests.exceptions.Timeout: raise Exception("TIMEOUT")
-            except requests.exceptions.SSLError as e:
-                raise Exception(self._friendly_ssl_error(e))
             except Exception as e:
                 if self._is_budget_exception(e):
                     raise
-                err_str = str(e).lower()
-                if any(k in err_str for k in ["overload", "429", "rate limit", "503", "500", "502", "504", "too many requests"]):
-                    if retries < max_retries:
-                        if self.status_callback: self.status_callback(f"עומס בשרת ה-AI (שגיאה זמנית)... ממתין {wait_times[retries]} שניות")
-                        if not self._sleep_with_cancel(wait_times[retries]):
-                            raise Exception("CANCELLED_BY_USER")
-                        retries += 1
-                        if self.status_callback: self.status_callback(f"מחדש פנייה לשרת (ניסיון {retries})...")
-                        continue
-                    else: raise Exception("RATE_LIMIT_ABORTED")
+                if isinstance(e, ApiRequestError):
+                    analysis = e.analysis
                 else:
-                    raise Exception(redact_sensitive_text(str(e), self.settings))
-        raise Exception("RATE_LIMIT_ABORTED")
+                    analysis = analyze_api_error(self.mode, current_model, error=e)
+                    if isinstance(e, requests.exceptions.SSLError):
+                        analysis.user_message = self._friendly_ssl_error(e)
+                        analysis.retry_action = "none"
+                if analysis.retry_action == "immediate" and immediate_retries < 1:
+                    immediate_retries += 1
+                    if self.status_callback:
+                        self.status_callback(api_retry_status_message(analysis, 0, retries + immediate_retries + 1))
+                    continue
+                if analysis.retryable and retries < max_retries:
+                    wait_seconds = analysis.retry_after if analysis.retry_after is not None else wait_times[retries]
+                    try:
+                        wait_seconds = float(wait_seconds)
+                    except Exception:
+                        wait_seconds = float(wait_times[retries])
+                    if wait_seconds > 180:
+                        raise ApiRequestError(api_retry_exhausted_analysis(analysis, wait_too_long=True))
+                    if self.status_callback:
+                        self.status_callback(api_retry_status_message(analysis, wait_seconds, retries + immediate_retries + 1))
+                    if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds):
+                        raise Exception("CANCELLED_BY_USER")
+                    retries += 1
+                    continue
+                if analysis.retryable:
+                    raise ApiRequestError(api_retry_exhausted_analysis(analysis))
+                else:
+                    raise ApiRequestError(analysis)
+        raise ApiRequestError(api_retry_exhausted_analysis(analyze_api_error(self.mode, current_model, error=Exception("retry attempts exhausted"))))
 
     def _verify_final_response(self, objective, final_response, force=False):
         if not self.settings.get("enable_final_verifier", True) or self._is_background_context():
@@ -5215,6 +5244,8 @@ CWD: {current_dir}
                         final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
+                    elif isinstance(e, ApiRequestError):
+                        final_response = f"ERROR_USER: {e.analysis.user_message}"
                     elif self._is_budget_exception(e):
                         final_response = self._budget_exception_user_message(e)
                     elif "RATE_LIMIT_ABORTED" in str(e):
@@ -5452,6 +5483,9 @@ CWD: {current_dir}
         except Exception as e:
             if self._is_budget_exception(e):
                 final_response = self._budget_exception_user_message(e)
+                return final_response
+            if isinstance(e, ApiRequestError):
+                final_response = f"ERROR_USER: {e.analysis.user_message}"
                 return final_response
             logging.exception("Agent loop crashed unexpectedly inside send_message.")
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
