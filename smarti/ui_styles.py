@@ -200,6 +200,75 @@ def themed_icon(*names):
     return QIcon()
 
 
+def set_themed_button_icon(button, names, fallback_text="", icon_size=20, clear_text=True):
+    if isinstance(names, str):
+        names = (names,)
+    names = tuple(str(name) for name in (names or ()) if str(name or "").strip())
+    button.setProperty("smartiIconNames", names)
+    button.setProperty("smartiIconFallbackText", fallback_text)
+    button.setProperty("smartiIconSize", int(icon_size))
+    button.setProperty("smartiIconClearText", bool(clear_text))
+    refresh_themed_button_icon(button)
+
+
+def refresh_themed_button_icon(button):
+    names = button.property("smartiIconNames")
+    if not names:
+        return
+    fallback_text = button.property("smartiIconFallbackText")
+    icon_size = int(button.property("smartiIconSize") or 20)
+    clear_text = bool(button.property("smartiIconClearText"))
+    icon = themed_icon(*tuple(names))
+    if not icon.isNull():
+        button.setIcon(icon)
+        button.setIconSize(QSize(icon_size, icon_size))
+        if clear_text:
+            button.setText("")
+    else:
+        button.setIcon(QIcon())
+        if fallback_text is not None:
+            button.setText(str(fallback_text))
+
+
+def set_themed_label_icon(label, names, fallback_text="", icon_size=28):
+    if isinstance(names, str):
+        names = (names,)
+    names = tuple(str(name) for name in (names or ()) if str(name or "").strip())
+    label.setProperty("smartiIconNames", names)
+    label.setProperty("smartiIconFallbackText", fallback_text)
+    label.setProperty("smartiIconSize", int(icon_size))
+    refresh_themed_label_icon(label)
+
+
+def refresh_themed_label_icon(label):
+    names = label.property("smartiIconNames")
+    if not names:
+        return
+    fallback_text = label.property("smartiIconFallbackText")
+    icon_size = int(label.property("smartiIconSize") or 28)
+    icon = themed_icon(*tuple(names))
+    if not icon.isNull():
+        label.setPixmap(icon.pixmap(icon_size, icon_size))
+        label.setText("")
+    else:
+        label.setPixmap(QPixmap())
+        if fallback_text is not None:
+            label.setText(str(fallback_text))
+
+
+def refresh_themed_widget_icons(root):
+    widgets = [root] if root is not None else []
+    try:
+        widgets += root.findChildren(QWidget) if root is not None else []
+    except Exception:
+        pass
+    for widget in widgets:
+        if isinstance(widget, QPushButton):
+            refresh_themed_button_icon(widget)
+        elif isinstance(widget, QLabel):
+            refresh_themed_label_icon(widget)
+
+
 def _refresh_theme_exports(mode=None, settings=None):
     global CURRENT_THEME_MODE, CURRENT_THEME
     global BG_COLOR, BG_ELEVATED_COLOR, PANEL_COLOR, PANEL_ELEVATED_COLOR

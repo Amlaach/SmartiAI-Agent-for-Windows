@@ -5,23 +5,15 @@ from .ui_styles import *
 from .ui_controls import *
 from .workers import FetchModelsWorker, ApiKeyValidationWorker
 
+def refresh_back_button_icon(btn):
+    btn.setProperty("smartiBackButton", True)
+    btn.setFixedSize(38, 38)
+    set_themed_button_icon(btn, ("back_icon",), "<", 26, clear_text=True)
+    btn.setStyleSheet(icon_button_css(38))
+
 def create_back_button(target_page_func):
     btn = QPushButton()
-    icon = themed_icon("back_icon")
-    if not icon.isNull():
-        btn.setIcon(icon)
-        btn.setIconSize(QSize(26, 26))
-        btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; border-radius: 18px; padding: 0px; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT}; }}"
-        )
-    else:
-        btn.setText("<") 
-        btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; border-radius: 18px; "
-            f"font-size: 24px; color: {TEXT_COLOR}; font-weight: 700; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT}; }}"
-        )
+    refresh_back_button_icon(btn)
     btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
     btn.clicked.connect(target_page_func)
     return btn
@@ -1119,9 +1111,7 @@ class SettingsPage(QWidget):
 
     def _make_reset_button(self):
         btn = QPushButton("אפס הגדרות")
-        icon = themed_icon("reset_icon", RESET_SVG_PATH)
-        btn.setIcon(icon if not icon.isNull() else QIcon(RESET_SVG_PATH))
-        btn.setIconSize(QSize(20, 20))
+        set_themed_button_icon(btn, ("reset_icon", RESET_SVG_PATH), btn.text(), 20, clear_text=False)
         btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.clicked.connect(self.confirm_reset_settings)
@@ -1484,7 +1474,7 @@ class SettingsPage(QWidget):
     def _refresh_live_theme_styles(self):
         self.setStyleSheet("background: transparent;")
         self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
-        self.back_btn.setStyleSheet(ghost_button_css())
+        refresh_back_button_icon(self.back_btn)
         for label in self.findChildren(QLabel):
             if label.property("smartiHighContrastLink"):
                 apply_high_contrast_link_label(label)
@@ -1521,6 +1511,7 @@ class SettingsPage(QWidget):
             if parent and parent.objectName() == "SegmentedControl":
                 continue
             button.setStyleSheet(SECONDARY_BUTTON_CSS)
+        refresh_themed_widget_icons(self)
         for toggle in self.findChildren(SmartiCheckBox):
             toggle.update()
         for card in self.findChildren(SettingsNavCard):

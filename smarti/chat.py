@@ -4,7 +4,7 @@ from .attachments import *
 from .ui_styles import *
 from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
-from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage
+from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
@@ -412,12 +412,7 @@ class CodeBlockWidget(QFrame):
         btn.setFixedSize(28, 28)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setToolTip(tooltip)
-        icon = _asset_icon(*filenames)
-        if not icon.isNull():
-            btn.setIcon(icon)
-            btn.setIconSize(QSize(18, 18))
-        else:
-            btn.setText(fallback)
+        set_themed_button_icon(btn, filenames, fallback, 18, clear_text=True)
         return btn
 
     def _button_css(self):
@@ -437,6 +432,8 @@ class CodeBlockWidget(QFrame):
         self.setStyleSheet(
             f"QFrame#CodeBlockWidget {{ background: {code_bg}; border: 1px solid {code_border}; border-radius: 24px; }}"
         )
+        refresh_themed_button_icon(self.copy_btn)
+        refresh_themed_button_icon(self.download_btn)
         self.copy_btn.setStyleSheet(self._button_css())
         self.download_btn.setStyleSheet(self._button_css())
         self.language_lbl.setStyleSheet(
@@ -506,14 +503,7 @@ def _attachment_icon_text(item):
     return ext[:4] or "DOC"
 
 def _set_button_icon_or_text(button, icon_names, fallback_text="", icon_size=20):
-    icon = _asset_icon(*icon_names)
-    if not icon.isNull():
-        button.setIcon(icon)
-        button.setIconSize(QSize(icon_size, icon_size))
-        button.setText("")
-    else:
-        button.setIcon(QIcon())
-        button.setText(fallback_text)
+    set_themed_button_icon(button, icon_names, fallback_text, icon_size, clear_text=True)
 
 class AttachmentTile(QFrame):
     remove_requested = pyqtSignal(object)
@@ -544,6 +534,15 @@ class AttachmentTile(QFrame):
         _set_button_icon_or_text(btn, ("attachment_remove_icon", "remove_attachment_icon", "close_icon", "x_icon"), "X", max(12, size - 8))
         btn.clicked.connect(lambda: self.remove_requested.emit(self.attachment))
         return btn
+
+    def apply_theme(self):
+        refresh_themed_widget_icons(self)
+        if not self._is_image:
+            self.setStyleSheet(
+                f"AttachmentTile {{ background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; "
+                f"border-radius: 12px; }}"
+                f"QLabel {{ background: transparent; color: {TEXT_COLOR}; }}"
+            )
 
     def _build_image_tile(self):
         path = self.attachment.get("path", "")
@@ -625,9 +624,7 @@ class AttachmentTile(QFrame):
             f"background: {MUTED_TEXT_COLOR}; color: {FIELD_COLOR}; border: none; "
             f"border-radius: 10px; font-size: 11px; font-weight: 800;"
         )
-        icon = _asset_icon("file_attachment_icon", "attachment_file_icon", "file_icon")
-        if not icon.isNull():
-            label.setPixmap(icon.pixmap(28, 28))
+        set_themed_label_icon(label, ("file_attachment_icon", "attachment_file_icon", "file_icon"), _attachment_icon_text(self.attachment), 28)
         return label
 
     def open_attachment(self):
@@ -679,6 +676,12 @@ class AttachmentPreviewStrip(QWidget):
             self.layout.addWidget(tile)
         self.layout.addStretch()
         self.setVisible(bool(attachments))
+
+    def apply_theme(self):
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        self.content.setStyleSheet("background: transparent;")
+        for tile in self.findChildren(AttachmentTile):
+            tile.apply_theme()
 
 # Google Drive picker UI is parked until OAuth sign-in is reworked.
 
@@ -783,6 +786,8 @@ class MessageBubble(QFrame):
         )
         for block in self.findChildren(CodeBlockWidget):
             block.apply_theme()
+        for tile in self.findChildren(AttachmentTile):
+            tile.apply_theme()
         apply_soft_shadow(self, blur=22, y=7, alpha=30)
 
     def update_parent_width(self, parent_width):
@@ -984,20 +989,11 @@ class ChatMessageContainer(QWidget):
             self.copy_btn.setFixedSize(24, 24)
             self.copy_btn.setToolTip("העתק")
             self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            copy_icon = _asset_icon("copy_icon")
-            if not copy_icon.isNull():
-                self.copy_btn.setIcon(copy_icon)
-                self.copy_btn.setIconSize(QSize(15, 15))
-            else:
-                self.copy_btn.setText("⧉")
+            set_themed_button_icon(self.copy_btn, ("copy_icon",), "⧉", 15, clear_text=True)
             self.copy_btn.clicked.connect(self.copy_message_text)
 
         self.tts_btn = None
-        self.tts_read_icon = QIcon()
-        self.tts_stop_icon = QIcon()
         if self.show_actions and not is_user:
-            self.tts_read_icon = _asset_icon("read_aloud_icon", "speaker_icon", "tts_icon")
-            self.tts_stop_icon = _asset_icon("stop_reading_icon", "stop_audio_icon", "stop_icon")
             self.tts_btn = QPushButton()
             self.tts_btn.setFixedSize(24, 24)
             self.tts_btn.setToolTip("Read aloud")
@@ -1047,10 +1043,8 @@ class ChatMessageContainer(QWidget):
         self.setStyleSheet("background: transparent;")
         self.actions_container.setStyleSheet("background: transparent;")
         if self.copy_btn:
+            refresh_themed_button_icon(self.copy_btn)
             self.copy_btn.setStyleSheet(self._button_css(False))
-        if self.tts_btn:
-            self.tts_read_icon = _asset_icon("read_aloud_icon", "speaker_icon", "tts_icon")
-            self.tts_stop_icon = _asset_icon("stop_reading_icon", "stop_audio_icon", "stop_icon")
         self.update_tts_button_state(self._tts_active, self._tts_blocked)
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
@@ -1061,14 +1055,12 @@ class ChatMessageContainer(QWidget):
         self._tts_active = bool(active)
         self._tts_blocked = bool(blocked)
         self.tts_btn.setEnabled(not blocked or active)
-        icon = self.tts_stop_icon if active else self.tts_read_icon
-        if not icon.isNull():
-            self.tts_btn.setIcon(icon)
-            self.tts_btn.setIconSize(QSize(15, 15))
-            self.tts_btn.setText("")
-        else:
-            self.tts_btn.setIcon(QIcon())
-            self.tts_btn.setText("X" if active else "A")
+        icon_names = (
+            ("stop_reading_icon", "stop_audio_icon", "stop_icon")
+            if active else
+            ("read_aloud_icon", "speaker_icon", "tts_icon")
+        )
+        set_themed_button_icon(self.tts_btn, icon_names, "X" if active else "A", 15, clear_text=True)
         self.tts_btn.setToolTip("Stop reading" if active else "Read aloud")
         self.tts_btn.setStyleSheet(self._button_css(active))
 
@@ -1300,17 +1292,11 @@ class ChatHistoryPage(QWidget):
         layout.setSpacing(12)
 
         top_bar = QHBoxLayout()
-        back_btn = QPushButton()
-        back_btn.setFixedSize(38, 38)
+        self.back_btn = QPushButton()
+        back_btn = self.back_btn
         back_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         back_btn.setToolTip("חזרה לצ'אט")
-        back_btn.setStyleSheet(icon_button_css(38))
-        back_icon = _asset_icon("back_icon")
-        if not back_icon.isNull():
-            back_btn.setIcon(back_icon)
-            back_btn.setIconSize(QSize(24, 24))
-        else:
-            back_btn.setText("<")
+        refresh_back_button_icon(back_btn)
         back_btn.clicked.connect(lambda: self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page))
         top_bar.addWidget(back_btn)
 
@@ -1347,6 +1333,7 @@ class ChatHistoryPage(QWidget):
         layout.addWidget(self.scroll, 1)
 
     def apply_theme(self):
+        refresh_back_button_icon(self.back_btn)
         self.new_chat_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
         self.search_edit.setStyleSheet(LINE_EDIT_CSS)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
@@ -1394,13 +1381,7 @@ class ChatHistoryPage(QWidget):
             "QPushButton:hover { background: transparent; border: none; }"
             "QPushButton:pressed { background: transparent; border: none; }"
         )
-        icon = _asset_icon(*filenames)
-        if not icon.isNull():
-            btn.setIcon(icon)
-            btn.setIconSize(QSize(18, 18))
-            btn.setText("")
-        else:
-            btn.setText(fallback_text)
+        set_themed_button_icon(btn, filenames, fallback_text, 18, clear_text=True)
         return btn
 
     def _session_row(self, record, active_id):
@@ -1667,14 +1648,8 @@ class ChatWindow(QMainWindow):
     def _set_menu_button_icon(self):
         if not hasattr(self, "menu_btn"):
             return
-        icon = _asset_icon("menu_icon")
-        if not icon.isNull():
-            self.menu_btn.setIcon(icon)
-            self.menu_btn.setIconSize(QSize(26, 26))
-            self.menu_btn.setText("")
-        else:
-            self.menu_btn.setIcon(QIcon())
-            self.menu_btn.setText("⋮")
+        set_themed_button_icon(self.menu_btn, ("menu_icon",), "⋮", 26, clear_text=True)
+        if self.menu_btn.text():
             self.menu_btn.setFont(QFont("Arial", 28, QFont.Weight.Bold))
 
     def _add_menu_action(self, text, callback, *icon_names):
@@ -1702,9 +1677,6 @@ class ChatWindow(QMainWindow):
         )
 
     def refresh_themed_icons(self):
-        self.mic_icon = _asset_icon("mic_icon")
-        self.send_icon = _asset_icon("send_icon")
-        self.stop_agent_icon = _asset_icon("stop_agent_icon")
         self._set_menu_button_icon()
         self._set_attach_button_icon()
         self._refresh_menu_action_icons()
@@ -1727,6 +1699,7 @@ class ChatWindow(QMainWindow):
 
     def apply_theme(self, mode=None, refresh_messages=True):
         apply_app_theme(QApplication.instance(), mode=mode, settings=self.core.settings)
+        refresh_themed_widget_icons(self)
         self.setStyleSheet(
             f"QMainWindow {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
             f"stop:0 {MESH_A}, stop:0.45 {MESH_B}, stop:0.72 {MESH_C}, stop:1 {MESH_D}); }}"
@@ -1760,6 +1733,8 @@ class ChatWindow(QMainWindow):
             self.input_field.setStyleSheet(self._chat_input_stylesheet())
         if hasattr(self, "attach_btn"):
             self._set_attach_button_icon()
+        if hasattr(self, "attachment_preview"):
+            self.attachment_preview.apply_theme()
         if hasattr(self, "attach_menu"):
             self.attach_menu.setStyleSheet(menu_stylesheet())
         if hasattr(self, "logo_lbl"):
@@ -2244,15 +2219,8 @@ class ChatWindow(QMainWindow):
 
         if self.agent_running:
             self.action_btn.setToolTip("עצור פעולה")
-            if not self.stop_agent_icon.isNull():
-                self.action_btn.setIcon(self.stop_agent_icon)
-                self.action_btn.setIconSize(QSize(28, 28))
-                self.action_btn.setText("")
-                border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
-            else:
-                self.action_btn.setIcon(QIcon())
-                self.action_btn.setText("■")
-                border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
+            set_themed_button_icon(self.action_btn, ("stop_agent_icon",), "■", 28, clear_text=True)
+            border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
             fg_color = ACCENT_TEXT_COLOR
             hover_bg = ACCENT_COLOR
             pressed_bg = ACCENT_TINT_STRONG
@@ -2260,18 +2228,10 @@ class ChatWindow(QMainWindow):
         else:
             self.action_btn.setToolTip("")
             has_text = bool(self.input_field.toPlainText().strip()) or bool(getattr(self, "pending_attachments", []))
-            target_icon = self.send_icon if has_text else self.mic_icon
             fallback_text = "שלח" if has_text else "קול"
-            
-            if not target_icon.isNull():
-                self.action_btn.setIcon(target_icon)
-                self.action_btn.setIconSize(QSize(28, 28))
-                self.action_btn.setText("")
-                border_css = "border: none; border-radius: 26px;"
-            else:
-                self.action_btn.setIcon(QIcon())
-                self.action_btn.setText(fallback_text)
-                border_css = "border: none; border-radius: 26px;"
+
+            set_themed_button_icon(self.action_btn, ("send_icon",) if has_text else ("mic_icon",), fallback_text, 28, clear_text=True)
+            border_css = "border: none; border-radius: 26px;"
             bg_color = ACCENT_COLOR if has_text else ACCENT_TINT_STRONG
             fg_color = ACCENT_TEXT_COLOR if has_text else ACCENT_COLOR
             hover_bg = ACCENT_SECONDARY_COLOR if has_text else HOVER_TINT
