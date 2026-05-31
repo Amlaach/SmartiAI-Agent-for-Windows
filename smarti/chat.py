@@ -1359,6 +1359,7 @@ class ChatWindow(QMainWindow):
     def __init__(self, core):
         super().__init__()
         self.core = core
+        self.core.start_new_chat_session()
         self.agent_running = False
         self.current_agent_bubble = None
         self.current_agent_container = None
