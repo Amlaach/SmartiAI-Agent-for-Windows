@@ -9,20 +9,15 @@ from .history import DEFAULT_CHAT_TITLE
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
 def _asset_icon(*filenames):
-    for filename in filenames:
-        path = os.path.join(ASSETS_DIR, filename)
-        if os.path.exists(path):
-            icon = QIcon(path)
-            if not icon.isNull():
-                return icon
-    return QIcon()
+    return themed_icon(*filenames)
 
 def _asset_path(*filenames):
-    for filename in filenames:
-        path = os.path.join(ASSETS_DIR, filename)
-        if os.path.exists(path):
-            return path.replace("\\", "/")
-    return ""
+    return themed_asset_path(*filenames)
+
+def _transparent_icon(size=22):
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    return QIcon(pixmap)
 
 def _escape_with_soft_breaks(text):
     raw = html.unescape(str(text or ""))
@@ -95,10 +90,8 @@ def _code_language_from_attrs(attrs):
 
 def _code_copy_icon_src():
     return _asset_path(
-        f"code_copy_icon_{CURRENT_THEME}.png", f"code_copy_icon_{CURRENT_THEME}.svg",
-        "code_copy_icon.png", "code_copy_icon.svg",
-        f"copy_icon_{CURRENT_THEME}.png", f"copy_icon_{CURRENT_THEME}.svg",
-        "copy_icon.png", "copy_icon.svg"
+        "code_copy_icon",
+        "copy_icon",
     )
 
 CODE_LANGUAGE_EXTENSIONS = {
@@ -369,10 +362,8 @@ class CodeBlockWidget(QFrame):
         self.copy_btn = self._make_icon_button(
             "העתק קוד",
             (
-                f"code_copy_icon_{CURRENT_THEME}.png", f"code_copy_icon_{CURRENT_THEME}.svg",
-                "code_copy_icon.png", "code_copy_icon.svg",
-                f"copy_icon_{CURRENT_THEME}.png", f"copy_icon_{CURRENT_THEME}.svg",
-                "copy_icon.png", "copy_icon.svg",
+                "code_copy_icon",
+                "copy_icon",
             ),
             "⧉",
         )
@@ -380,10 +371,8 @@ class CodeBlockWidget(QFrame):
         self.download_btn = self._make_icon_button(
             "הורד קובץ",
             (
-                f"code_download_icon_{CURRENT_THEME}.png", f"code_download_icon_{CURRENT_THEME}.svg",
-                "code_download_icon.png", "code_download_icon.svg",
-                f"download_icon_{CURRENT_THEME}.png", f"download_icon_{CURRENT_THEME}.svg",
-                "download_icon.png", "download_icon.svg",
+                "code_download_icon",
+                "download_icon",
             ),
             "↓",
         )
@@ -780,9 +769,9 @@ class ChatMessageContainer(QWidget):
             self.copy_btn.setFixedSize(24, 24)
             self.copy_btn.setToolTip("העתק")
             self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            copy_icon_path = os.path.join(ASSETS_DIR, "copy_icon.png")
-            if os.path.exists(copy_icon_path):
-                self.copy_btn.setIcon(QIcon(copy_icon_path))
+            copy_icon = _asset_icon("copy_icon")
+            if not copy_icon.isNull():
+                self.copy_btn.setIcon(copy_icon)
                 self.copy_btn.setIconSize(QSize(15, 15))
             else:
                 self.copy_btn.setText("⧉")
@@ -792,8 +781,8 @@ class ChatMessageContainer(QWidget):
         self.tts_read_icon = QIcon()
         self.tts_stop_icon = QIcon()
         if self.show_actions and not is_user:
-            self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
-            self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
+            self.tts_read_icon = _asset_icon("read_aloud_icon", "speaker_icon", "tts_icon")
+            self.tts_stop_icon = _asset_icon("stop_reading_icon", "stop_audio_icon", "stop_icon")
             self.tts_btn = QPushButton()
             self.tts_btn.setFixedSize(24, 24)
             self.tts_btn.setToolTip("Read aloud")
@@ -845,8 +834,8 @@ class ChatMessageContainer(QWidget):
         if self.copy_btn:
             self.copy_btn.setStyleSheet(self._button_css(False))
         if self.tts_btn:
-            self.tts_read_icon = _asset_icon(f"read_aloud_icon_{CURRENT_THEME}.png", "read_aloud_icon.png", "speaker_icon.png", "tts_icon.png")
-            self.tts_stop_icon = _asset_icon(f"stop_reading_icon_{CURRENT_THEME}.png", "stop_reading_icon.png", "stop_audio_icon.png", "stop_icon.png")
+            self.tts_read_icon = _asset_icon("read_aloud_icon", "speaker_icon", "tts_icon")
+            self.tts_stop_icon = _asset_icon("stop_reading_icon", "stop_audio_icon", "stop_icon")
         self.update_tts_button_state(self._tts_active, self._tts_blocked)
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
@@ -1101,7 +1090,7 @@ class ChatHistoryPage(QWidget):
         back_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         back_btn.setToolTip("חזרה לצ'אט")
         back_btn.setStyleSheet(icon_button_css(38))
-        back_icon = _asset_icon(f"back_icon_{CURRENT_THEME}.png", f"back_icon_{CURRENT_THEME}.svg", "back_icon.png", "back_icon.svg")
+        back_icon = _asset_icon("back_icon")
         if not back_icon.isNull():
             back_btn.setIcon(back_icon)
             back_btn.setIconSize(QSize(24, 24))
@@ -1242,29 +1231,26 @@ class ChatHistoryPage(QWidget):
         pin_btn = self._icon_button(
             "בטל הצמדה" if record.get("pinned") else "הצמד שיחה",
             (
-                f"unpin_icon_{CURRENT_THEME}.png" if record.get("pinned") else f"pin_icon_{CURRENT_THEME}.png",
-                f"unpin_icon_{CURRENT_THEME}.svg" if record.get("pinned") else f"pin_icon_{CURRENT_THEME}.svg",
-                "unpin_icon.png" if record.get("pinned") else "pin_icon.png",
-                "unpin_icon.svg" if record.get("pinned") else "pin_icon.svg",
+                "unpin_icon" if record.get("pinned") else "pin_icon",
             ),
             fallback_text="★" if record.get("pinned") else "☆",
         )
         pin_btn.clicked.connect(lambda checked=False, sid=session_id, pinned=not record.get("pinned"): self.set_pinned(sid, pinned))
         rename_btn = self._icon_button(
             "שנה שם",
-            (f"rename_icon_{CURRENT_THEME}.png", f"rename_icon_{CURRENT_THEME}.svg", "rename_icon.png", "rename_icon.svg"),
+            ("rename_icon",),
             fallback_text="✎",
         )
         rename_btn.clicked.connect(lambda checked=False, sid=session_id, current=record.get("title", ""): self.rename_session(sid, current))
         export_btn = self._icon_button(
             "יצוא JSON",
-            (f"export_json_icon_{CURRENT_THEME}.png", f"export_json_icon_{CURRENT_THEME}.svg", "export_json_icon.png", "export_json_icon.svg", "export_icon.png", "export_icon.svg"),
+            ("export_json_icon", "export_icon"),
             fallback_text="{}",
         )
         export_btn.clicked.connect(lambda checked=False, sid=session_id, title=record.get("title", ""): self.export_session(sid, title))
         delete_btn = self._icon_button(
             "מחק שיחה",
-            (f"delete_icon_{CURRENT_THEME}.png", f"delete_icon_{CURRENT_THEME}.svg", "delete_icon.png", "delete_icon.svg"),
+            ("delete_icon",),
             fallback_text="×",
             danger=True,
         )
@@ -1462,6 +1448,35 @@ class ChatWindow(QMainWindow):
             f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
         )
 
+    def _set_menu_button_icon(self):
+        if not hasattr(self, "menu_btn"):
+            return
+        icon = _asset_icon("menu_icon")
+        if not icon.isNull():
+            self.menu_btn.setIcon(icon)
+            self.menu_btn.setIconSize(QSize(26, 26))
+            self.menu_btn.setText("")
+        else:
+            self.menu_btn.setIcon(QIcon())
+            self.menu_btn.setText("⋮")
+            self.menu_btn.setFont(QFont("Arial", 28, QFont.Weight.Bold))
+
+    def _add_menu_action(self, text, callback, *icon_names):
+        action = self.menu.addAction(text)
+        action.setIconVisibleInMenu(True)
+        action.triggered.connect(callback)
+        self._menu_actions.append((action, icon_names))
+        self._refresh_menu_action_icon(action, icon_names)
+        return action
+
+    def _refresh_menu_action_icon(self, action, icon_names):
+        icon = _asset_icon(*icon_names)
+        action.setIcon(icon if not icon.isNull() else _transparent_icon(22))
+
+    def _refresh_menu_action_icons(self):
+        for action, icon_names in getattr(self, "_menu_actions", []):
+            self._refresh_menu_action_icon(action, icon_names)
+
     def _chat_input_stylesheet(self):
         return (
             f"QTextEdit {{ background-color: transparent; color: {FIELD_TEXT_COLOR}; border: none; "
@@ -1471,9 +1486,11 @@ class ChatWindow(QMainWindow):
         )
 
     def refresh_themed_icons(self):
-        self.mic_icon = _asset_icon(f"mic_icon_{CURRENT_THEME}.png", "mic_icon.png")
-        self.send_icon = _asset_icon(f"send_icon_{CURRENT_THEME}.png", "send_icon.png")
-        self.stop_agent_icon = _asset_icon(f"stop_agent_icon_{CURRENT_THEME}.png", "stop_agent_icon.png")
+        self.mic_icon = _asset_icon("mic_icon")
+        self.send_icon = _asset_icon("send_icon")
+        self.stop_agent_icon = _asset_icon("stop_agent_icon")
+        self._set_menu_button_icon()
+        self._refresh_menu_action_icons()
 
     def apply_theme(self, mode=None, refresh_messages=True):
         apply_app_theme(QApplication.instance(), mode=mode, settings=self.core.settings)
@@ -1572,15 +1589,20 @@ class ChatWindow(QMainWindow):
         self.menu_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
         self.menu = QMenu(self)
+        self.menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        if hasattr(self.menu, "setIconSize"):
+            self.menu.setIconSize(QSize(22, 22))
         self.menu.setStyleSheet(menu_stylesheet())
-        self.menu.addAction("שיחה חדשה").triggered.connect(self.start_new_chat)
-        self.menu.addAction("היסטוריית שיחות").triggered.connect(self.show_history_page)
-        self.menu.addAction("כלים").triggered.connect(self.show_tools_page)
-        self.menu.addAction("הגדרות").triggered.connect(self.show_settings_page)
-        self.menu.addAction("מרכז משימות").triggered.connect(self.show_task_center_page)
-        self.menu.addAction("נתוני שימוש").triggered.connect(self.show_usage_page)
-        self.menu.addAction("אודות").triggered.connect(self.show_about_page)
+        self._menu_actions = []
+        self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
+        self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
+        self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
+        self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
+        self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")
+        self._add_menu_action("נתוני שימוש", self.show_usage_page, "usage_icon", "usage_stats_icon", "chart_icon")
+        self._add_menu_action("אודות", self.show_about_page, "about_icon", "info_icon")
         self.menu_btn.clicked.connect(self.show_menu)
+        self._set_menu_button_icon()
         
         titles_layout = QVBoxLayout()
         titles_layout.setSpacing(0)

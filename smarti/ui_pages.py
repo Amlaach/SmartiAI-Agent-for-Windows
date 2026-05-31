@@ -7,9 +7,9 @@ from .workers import FetchModelsWorker, ApiKeyValidationWorker
 
 def create_back_button(target_page_func):
     btn = QPushButton()
-    icon_path = os.path.join(ASSETS_DIR, "back_icon.png")
-    if os.path.exists(icon_path):
-        btn.setIcon(QIcon(icon_path))
+    icon = themed_icon("back_icon")
+    if not icon.isNull():
+        btn.setIcon(icon)
         btn.setIconSize(QSize(26, 26))
         btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none; border-radius: 18px; padding: 0px; }}"
@@ -1117,8 +1117,8 @@ class SettingsPage(QWidget):
 
     def _make_reset_button(self):
         btn = QPushButton("אפס הגדרות")
-        reset_icon_path = os.path.join(ASSETS_DIR, "reset_icon.png")
-        btn.setIcon(QIcon(reset_icon_path if os.path.exists(reset_icon_path) else RESET_SVG_PATH))
+        icon = themed_icon("reset_icon", RESET_SVG_PATH)
+        btn.setIcon(icon if not icon.isNull() else QIcon(RESET_SVG_PATH))
         btn.setIconSize(QSize(20, 20))
         btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))

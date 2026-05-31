@@ -157,6 +157,45 @@ def _svg_asset(filename, svg_text):
     return path.replace("\\", "/") if path else ""
 
 
+def themed_asset_candidates(*names):
+    candidates = []
+    for name in names:
+        raw = str(name or "").strip()
+        if not raw:
+            continue
+        if os.path.isabs(raw) or os.path.dirname(raw):
+            candidates.append(raw)
+            continue
+        stem, ext = os.path.splitext(raw)
+        if ext:
+            candidates.append(f"{stem}_{CURRENT_THEME}{ext}")
+            candidates.append(raw)
+        else:
+            for suffix in (".png", ".svg"):
+                candidates.append(f"{raw}_{CURRENT_THEME}{suffix}")
+            for suffix in (".png", ".svg"):
+                candidates.append(f"{raw}{suffix}")
+    return list(dict.fromkeys(candidates))
+
+
+def themed_asset_path(*names):
+    for filename in themed_asset_candidates(*names):
+        path = filename if os.path.isabs(filename) or os.path.dirname(filename) else os.path.join(ASSETS_DIR, filename)
+        if os.path.exists(path):
+            return path.replace("\\", "/")
+    return ""
+
+
+def themed_icon(*names):
+    for filename in themed_asset_candidates(*names):
+        path = filename if os.path.isabs(filename) or os.path.dirname(filename) else os.path.join(ASSETS_DIR, filename)
+        if os.path.exists(path):
+            icon = QIcon(path)
+            if not icon.isNull():
+                return icon
+    return QIcon()
+
+
 def _refresh_theme_exports(mode=None, settings=None):
     global CURRENT_THEME_MODE, CURRENT_THEME
     global BG_COLOR, BG_ELEVATED_COLOR, PANEL_COLOR, PANEL_ELEVATED_COLOR
@@ -462,8 +501,12 @@ def application_stylesheet():
             padding: 7px;
         }}
         QMenu::item {{
-            padding: 9px 30px 9px 12px;
+            padding: 10px 42px 10px 16px;
             border-radius: 14px;
+            min-width: 154px;
+        }}
+        QMenu::icon {{
+            padding-right: 10px;
         }}
         QMenu::item:selected {{
             background-color: {ACCENT_TINT_STRONG};
@@ -505,7 +548,8 @@ def menu_stylesheet():
             font-size: 14px;
             padding: 7px;
         }}
-        QMenu::item {{ padding: 9px 30px 9px 12px; border-radius: 14px; }}
+        QMenu::item {{ padding: 10px 42px 10px 16px; border-radius: 14px; min-width: 154px; }}
+        QMenu::icon {{ padding-right: 10px; }}
         QMenu::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}
     """
 
