@@ -1445,6 +1445,55 @@ class ClickableSessionFrame(QFrame):
             self.clicked.emit(self.session_id)
         super().mouseReleaseEvent(event)
 
+class EndElideLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(False)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full_text = str(text or "")
+        self._apply_elide()
+
+    def fullText(self):
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        full_text = getattr(self, "_full_text", "")
+        width = max(0, self.contentsRect().width())
+        if not full_text or width <= 0:
+            QLabel.setText(self, full_text)
+            self.setToolTip("")
+            return
+        metrics = QFontMetrics(self.font())
+        if metrics.horizontalAdvance(full_text) <= width:
+            QLabel.setText(self, full_text)
+            self.setToolTip("")
+            return
+        suffix = "..."
+        if metrics.horizontalAdvance(suffix) >= width:
+            QLabel.setText(self, suffix)
+            self.setToolTip(full_text)
+            return
+        low, high = 0, len(full_text)
+        while low < high:
+            mid = (low + high + 1) // 2
+            candidate = full_text[:mid].rstrip() + suffix
+            if metrics.horizontalAdvance(candidate) <= width:
+                low = mid
+            else:
+                high = mid - 1
+        QLabel.setText(self, full_text[:low].rstrip() + suffix)
+        self.setToolTip(full_text)
+
 class ChatHistoryPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__()
@@ -1553,15 +1602,21 @@ class ChatHistoryPage(QWidget):
         session_id = record.get("id")
         row = ClickableSessionFrame(session_id)
         row.clicked.connect(self.open_session)
+        row.setMinimumWidth(0)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         row.setStyleSheet(card_css(10, 8))
         row_layout = QVBoxLayout(row)
         row_layout.setContentsMargins(12, 10, 12, 10)
         row_layout.setSpacing(7)
 
         title_row = QHBoxLayout()
-        title = QLabel(record.get("title") or DEFAULT_CHAT_TITLE)
+        title = QLabel()
         title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        title.setTextFormat(Qt.TextFormat.RichText)
         title.setWordWrap(True)
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        title.setText(_escape_plain_text_with_soft_breaks(record.get("title") or DEFAULT_CHAT_TITLE))
         title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px; font-weight: 800; border: none;")
         title_row.addWidget(title, 1)
 
@@ -1575,14 +1630,19 @@ class ChatHistoryPage(QWidget):
             title_row.addWidget(active)
         row_layout.addLayout(title_row)
 
-        preview = QLabel(record.get("preview", ""))
+        preview = QLabel()
         preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        preview.setTextFormat(Qt.TextFormat.RichText)
         preview.setWordWrap(True)
+        preview.setMinimumWidth(0)
+        preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        preview.setText(_escape_plain_text_with_soft_breaks(record.get("preview", "")).replace("\n", "<br>"))
         preview.setStyleSheet(muted_label_css(12) + " border: none;")
         row_layout.addWidget(preview)
 
         meta = QLabel(f"{self._format_time(record.get('updated_at'))} · {record.get('message_count', 0)} הודעות")
         meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        meta.setMinimumWidth(0)
         meta.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px; border: none;")
         row_layout.addWidget(meta)
 
@@ -1882,6 +1942,8 @@ class ChatWindow(QMainWindow):
             self.refresh_chat_title()
         if hasattr(self, "subtitle"):
             self.subtitle.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 12px; font-weight: 700;")
+            if hasattr(self.subtitle, "fullText"):
+                self.subtitle.setText(self.subtitle.fullText())
         if hasattr(self, "header_line"):
             self.header_line.setStyleSheet("background: transparent; max-height: 0px;")
         if hasattr(self, "scroll"):
@@ -1981,14 +2043,20 @@ class ChatWindow(QMainWindow):
         self.menu_btn.clicked.connect(self.show_menu)
         self._set_menu_button_icon()
         
-        titles_layout = QVBoxLayout()
+        titles_widget = QWidget()
+        self.titles_widget = titles_widget
+        titles_widget.setMinimumWidth(0)
+        titles_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        titles_widget.setStyleSheet("background: transparent; border: none;")
+        titles_layout = QVBoxLayout(titles_widget)
+        titles_layout.setContentsMargins(8, 0, 8, 0)
         titles_layout.setSpacing(0)
-        self.title_label = QLabel(self.active_chat_title())
+        self.title_label = EndElideLabel(self.active_chat_title())
         self.title_label.setStyleSheet(page_title_css(19))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         raw_model = self.core.settings.get(f"selected_{self.core.mode}_model", "Gemini")
-        self.subtitle = QLabel(self.format_model_name(raw_model))
+        self.subtitle = EndElideLabel(self.format_model_name(raw_model))
         self.subtitle.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 12px; font-weight: 700;")
         self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         titles_layout.addWidget(self.title_label)
@@ -2008,9 +2076,7 @@ class ChatWindow(QMainWindow):
             self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
         top_layout.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        top_layout.addStretch()
-        top_layout.addLayout(titles_layout)
-        top_layout.addStretch()
+        top_layout.addWidget(titles_widget, 1)
         top_layout.addWidget(self.menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         main_layout.addWidget(top_bar)
         

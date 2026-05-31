@@ -574,12 +574,12 @@ def application_stylesheet():
             padding: 7px;
         }}
         QMenu::item {{
-            padding: 10px 42px 10px 16px;
+            padding: 9px 30px 9px 10px;
             border-radius: 14px;
-            min-width: 154px;
+            min-width: 118px;
         }}
         QMenu::icon {{
-            padding-right: 10px;
+            padding-right: 4px;
         }}
         QMenu::item:selected {{
             background-color: {ACCENT_TINT_STRONG};
@@ -621,8 +621,8 @@ def menu_stylesheet():
             font-size: 14px;
             padding: 7px;
         }}
-        QMenu::item {{ padding: 10px 42px 10px 16px; border-radius: 14px; min-width: 154px; }}
-        QMenu::icon {{ padding-right: 10px; }}
+        QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 14px; min-width: 118px; }}
+        QMenu::icon {{ padding-right: 4px; }}
         QMenu::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}
     """
 
