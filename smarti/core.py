@@ -3,6 +3,9 @@ from .common import *
 from .config import *
 from .managers import *
 from .history import ChatSessionStore, DEFAULT_CHAT_TITLE
+from .attachments import *
+# Google Drive integration is parked until the OAuth flow is reliable for end users.
+# from .google_drive import GoogleDriveClient
 from .api_errors import (
     ApiRequestError,
     analyze_api_error,
@@ -73,6 +76,7 @@ class SmartiCore:
         self.cancel_event = threading.Event()
         self.recent_tool_observations = []
         self.tool_observations = []
+        self.conversation_attachments = []
         self._ensure_tools_dir()
         self.audit_logger = AuditLogger(AUDIT_LOG_FILE)
         self.policy_engine = PolicyEngine(self)
@@ -83,6 +87,8 @@ class SmartiCore:
         self.skill_manager = SkillManager(self)
         self.background_scheduler = BackgroundScheduler(self)
         self.ui_state = UiState(self)
+        # Google Drive is intentionally not initialized while the integration is hidden.
+        self.google_drive = None
         self.system_prompt = self._load_system_prompt()
         self.setup_model()
         self._restore_active_chat_context()
@@ -115,6 +121,7 @@ class SmartiCore:
         if not os.path.exists(TOOLS_DIR): os.makedirs(TOOLS_DIR)
         if not os.path.exists(MCP_TOOLS_DIR): os.makedirs(MCP_TOOLS_DIR)
         if not os.path.exists(SKILLS_DIR): os.makedirs(SKILLS_DIR)
+        if not os.path.exists(ATTACHMENTS_DIR): os.makedirs(ATTACHMENTS_DIR)
         if not os.path.exists(ASSETS_DIR): os.makedirs(ASSETS_DIR)
         if not os.path.exists(OUTPUTS_DIR): os.makedirs(OUTPUTS_DIR)
 
@@ -1274,6 +1281,8 @@ class SmartiCore:
                 args["text"] = args.get("search_text")
             return {k: v for k, v in args.items() if k in {"action", "path", "content", "query", "directory", "text"}}
 
+        # google_drive_manager argument normalization is parked with the Drive integration.
+
         if action == "trash_file_or_folder":
             if "path" not in args:
                 for alias in ("file_path", "folder_path", "filepath", "target"):
@@ -1608,6 +1617,9 @@ class SmartiCore:
             if op == "extract_image_text":
                 self._require_unified_fields(op, args, ["path"])
                 return "extract_image_text", {"path": args.get("path")}
+            if op == "attach":
+                self._require_unified_fields(op, args, ["path"])
+                return "attach_local_file", {"path": args.get("path")}
             if op in {"trash", "recycle", "delete", "remove"}:
                 self._require_unified_fields(op, args, ["path"])
                 return "trash_file_or_folder", {"path": args.get("path")}
@@ -1881,6 +1893,10 @@ class SmartiCore:
 
     def _append_tool_feedback(self, current_messages, ai_response_text, action, feedback_for_ai):
         is_error = str(feedback_for_ai).startswith("ERROR:")
+        if not is_error and str(feedback_for_ai).startswith("ATTACHMENT_JSON:"):
+            self._append_attachment_tool_feedback(current_messages, ai_response_text, action, str(feedback_for_ai).split(":", 1)[1])
+            return
+        raw_feedback_for_ai = feedback_for_ai
         feedback_for_ai = self._compact_tool_feedback_for_model(action, feedback_for_ai, is_error=is_error)
         if is_error:
             feedback_payload = (
@@ -1890,12 +1906,12 @@ class SmartiCore:
         else:
             feedback_payload = self._wrap_tool_output_for_model(action, feedback_for_ai, is_error=False)
 
-        if str(feedback_for_ai).startswith("IMAGE_BASE64:"):
-            parts = str(feedback_for_ai).split(":", 2)
+        if not is_error and str(raw_feedback_for_ai).startswith("IMAGE_BASE64:"):
+            parts = str(raw_feedback_for_ai).split(":", 2)
             if len(parts) == 3:
                 mime_type, b64_data = parts[1], parts[2]
             else:
-                mime_type, b64_data = "image/png", str(feedback_for_ai).split(":", 1)[1]
+                mime_type, b64_data = "image/png", str(raw_feedback_for_ai).split(":", 1)[1]
             image_text = self._wrap_tool_output_for_model(action, "[תמונה צורפה לניתוח]", is_error=False)
             if self.mode == "gemini":
                 current_messages.append({"role": "model", "parts": [{"text": ai_response_text}]})
@@ -2190,10 +2206,29 @@ class SmartiCore:
         if not isinstance(message, dict):
             return str(message)
         if "content" in message:
-            return str(message.get("content", ""))
+            content = message.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if "text" in block:
+                        parts.append(str(block.get("text", "")))
+                    elif block.get("type") in {"image", "document", "input_file", "image_url"}:
+                        parts.append(f"[{block.get('type')} attachment]")
+                return "\n".join(parts)
+            return str(content)
         parts = message.get("parts", [])
         if isinstance(parts, list):
-            return "\n".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
+            text_parts = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if "text" in part:
+                    text_parts.append(str(part.get("text", "")))
+                elif "inlineData" in part or "fileData" in part:
+                    text_parts.append("[attachment]")
+            return "\n".join(text_parts)
         return str(message)
 
     def _messages_char_budget(self, messages):
@@ -4177,6 +4212,7 @@ class SmartiCore:
             "tool_context_transcript": copy.deepcopy(self.settings.get("tool_context_transcript", [])),
             "recent_tool_observations": copy.deepcopy(getattr(self, "recent_tool_observations", [])),
             "tool_observations": copy.deepcopy(getattr(self, "tool_observations", [])),
+            "conversation_attachments": copy.deepcopy(getattr(self, "conversation_attachments", [])),
         }
 
     def _restore_active_chat_context(self):
@@ -4190,6 +4226,7 @@ class SmartiCore:
         self.settings["tool_context_transcript"] = copy.deepcopy(transcript if isinstance(transcript, list) else [])
         self.recent_tool_observations = copy.deepcopy(context.get("recent_tool_observations", []) if isinstance(context.get("recent_tool_observations", []), list) else [])
         self.tool_observations = copy.deepcopy(context.get("tool_observations", []) if isinstance(context.get("tool_observations", []), list) else [])
+        self.conversation_attachments = normalize_attachments(context.get("conversation_attachments", []) if isinstance(context.get("conversation_attachments", []), list) else [])
         self.system_prompt = self._load_system_prompt()
 
         saved_mode = normalize_provider_name(context.get("mode", ""))
@@ -4217,6 +4254,7 @@ class SmartiCore:
             self.universal_history = [{"role": "system", "content": getattr(self, "system_prompt", "")}]
         self.recent_tool_observations = []
         self.tool_observations = []
+        self.conversation_attachments = []
         self.settings["tool_context_transcript"] = []
         self.settings["conversation_summary"] = ""
         self.system_prompt = self._load_system_prompt()
@@ -4304,7 +4342,7 @@ class SmartiCore:
             return f"שגיאה: {text.replace('ERROR_USER:', '').strip()}"
         return text
 
-    def _record_active_chat_turn(self, user_text, final_response):
+    def _record_active_chat_turn(self, user_text, final_response, attachments=None):
         if not getattr(self, "chat_store", None):
             return
         should_title = (
@@ -4321,6 +4359,7 @@ class SmartiCore:
             is_error=str(final_response or "").startswith("ERROR_USER:"),
             title=title,
             context=self._chat_context_snapshot(),
+            user_metadata={"attachments": normalize_attachments(attachments or [])},
         )
 
     def _load_settings(self):
@@ -4795,6 +4834,7 @@ class SmartiCore:
             else (self.settings.get("user_memory", "") or "No memory manager available.")
         )
         conversation_summary = self.settings.get("conversation_summary", "").strip() or "אין סיכום שיחה קודם."
+        attachments_context = attachment_manifest_text(getattr(self, "conversation_attachments", [])) or "No files attached in this conversation."
         recent_observations = "\n".join(self.recent_tool_observations[-6:]) if getattr(self, "recent_tool_observations", None) else "אין תצפיות כלים אחרונות."
         recent_observations = "\n".join(self.recent_tool_observations[-12:]) if getattr(self, "recent_tool_observations", None) else recent_observations
         tool_context_transcript = self._tool_context_prompt(memory_query)
@@ -4960,6 +5000,9 @@ CWD: {current_dir}
 
 **סיכום שיחה קודם:**
 {conversation_summary}
+
+**Attached files in this conversation:**
+{attachments_context}
 
 **תצפיות אחרונות:** {recent_observations}
 """
@@ -5156,7 +5199,274 @@ CWD: {current_dir}
             logging.warning(f"Final verifier skipped: {e}")
         return final_response
 
-    def send_message(self, user_text, is_background_task=False, cancel_event=None):
+    def _attachment_inline_max_bytes(self):
+        try:
+            mb = float(self.settings.get("attachment_inline_max_mb", 20) or 20)
+        except Exception:
+            mb = 20
+        return max(1, int(mb * 1024 * 1024))
+
+    def _attachment_text_excerpt_chars(self):
+        try:
+            return max(1000, int(self.settings.get("attachment_text_excerpt_chars", 10000) or 10000))
+        except Exception:
+            return 10000
+
+    def _attachment_warning_text(self, warnings):
+        warnings = [str(item).strip() for item in warnings or [] if str(item).strip()]
+        if not warnings:
+            return ""
+        return "[SMARTI_ATTACHMENT_WARNINGS]\n" + "\n".join(f"- {item}" for item in warnings) + "\n[/SMARTI_ATTACHMENT_WARNINGS]"
+
+    def _attachment_text_block(self, item):
+        excerpt = attachment_text_excerpt(item, self._attachment_text_excerpt_chars())
+        if not excerpt:
+            return ""
+        return (
+            f"[UNTRUSTED_ATTACHED_TEXT_FILE_BEGIN name={item.get('name')} path={item.get('path')}]\n"
+            f"{excerpt}\n"
+            "[UNTRUSTED_ATTACHED_TEXT_FILE_END]"
+        )
+
+    def _provider_attachment_blocks(self, item):
+        item = normalize_attachment(item)
+        if not item:
+            return [], ["Invalid attachment."]
+        supported, reason = provider_attachment_support(self.mode, item)
+        text_block = self._attachment_text_block(item)
+        if text_block and not (item.get("kind") in {"image", "audio", "video"} or item.get("mime_type") == "application/pdf"):
+            supported = True
+        if not supported:
+            return [], [reason]
+        if text_block and self.mode == "gemini" and is_text_attachment(item):
+            return [{"text": text_block}], []
+        if text_block and self.mode != "gemini":
+            if self.mode == "anthropic":
+                return [{"type": "text", "text": text_block}], []
+            return [{"type": "text", "text": text_block}], []
+        max_bytes = self._attachment_inline_max_bytes()
+        data, error = read_attachment_bytes(item, max_bytes=max_bytes)
+        if error:
+            if text_block:
+                if self.mode == "gemini":
+                    return [{"text": text_block}], [error]
+                return [{"type": "text", "text": text_block}], [error]
+            return [], [error]
+        mime_type = str(item.get("mime_type") or "application/octet-stream")
+        b64_data = base64.b64encode(data).decode("ascii")
+        if self.mode == "gemini":
+            if text_block and is_text_attachment(item):
+                return [{"text": text_block}], []
+            return [{"inlineData": {"mimeType": mime_type, "data": b64_data}}], []
+        if self.mode == "anthropic":
+            if item.get("kind") == "image":
+                return [{"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64_data}}], []
+            if mime_type == "application/pdf":
+                return [{"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64_data}}], []
+            if text_block:
+                return [{"type": "text", "text": text_block}], []
+            return [], [f"Claude does not support inline upload for {mime_type} in this adapter."]
+        if self.mode == "openai" or is_openai_compatible_provider(self.mode) or self.mode == "local":
+            if item.get("kind") == "image":
+                data_url = f"data:{mime_type};base64,{b64_data}"
+                return [{"type": "image_url", "image_url": {"url": data_url}}], []
+            if text_block:
+                return [{"type": "text", "text": text_block}], []
+            return [], [f"OpenAI-compatible Chat Completions does not support inline upload for {mime_type} in this adapter."]
+        return [], [f"No attachment adapter for provider {self.mode}."]
+
+    def _build_user_message_with_attachments(self, user_text, attachments):
+        attachments = normalize_attachments(attachments)
+        manifest = attachment_manifest_text(attachments)
+        text = str(user_text or "").strip()
+        if manifest:
+            text = (text + "\n\n" + manifest).strip()
+        if not attachments:
+            return (
+                {"role": "user", "parts": [{"text": text}]} if self.mode == "gemini" else {"role": "user", "content": text}
+            )
+        warnings = []
+        if self.mode == "gemini":
+            parts = []
+            for item in attachments:
+                blocks, errs = self._provider_attachment_blocks(item)
+                warnings.extend(errs)
+                parts.extend(blocks)
+            warning_text = self._attachment_warning_text(warnings)
+            final_text = (text + ("\n\n" + warning_text if warning_text else "")).strip()
+            parts.append({"text": final_text or "Attached files."})
+            return {"role": "user", "parts": parts}
+        content = []
+        for item in attachments:
+            blocks, errs = self._provider_attachment_blocks(item)
+            warnings.extend(errs)
+            content.extend(blocks)
+        warning_text = self._attachment_warning_text(warnings)
+        final_text = (text + ("\n\n" + warning_text if warning_text else "")).strip()
+        content.append({"type": "text", "text": final_text or "Attached files."})
+        return {"role": "user", "content": content}
+
+    def _attachment_tool_payload(self, path):
+        item = attachment_from_path(path, source="agent_tool")
+        if not item:
+            return f"ERROR: Attachment file not found: {path}"
+        return "ATTACHMENT_JSON:" + json.dumps(item, ensure_ascii=False)
+
+    def attach_local_file_tool(self, path):
+        path = os.path.abspath(str(path or "").strip(' "\''))
+        if not os.path.isfile(path):
+            return f"ERROR: Attachment file not found: {path}"
+        allowed, err = self._ensure_cloud_upload_allowed(path)
+        if not allowed:
+            return err
+        return self._attachment_tool_payload(path)
+
+    def google_drive_manager(self, args):
+        # Google Drive manager is parked until OAuth sign-in is reworked and re-enabled.
+        return "ERROR: Google Drive integration is currently disabled."
+
+        from .google_drive import GoogleDriveClient
+
+        args = args if isinstance(args, dict) else {}
+        action = str(args.get("action", "status") or "status").strip().lower()
+        drive = getattr(self, "google_drive", None) or GoogleDriveClient(self)
+        if action == "status":
+            connected = bool(drive._setting("google_drive_refresh_token"))
+            return json.dumps({
+                "configured": drive.configured(),
+                "connected": connected,
+                "connected_at": self.settings.get("google_drive_connected_at", ""),
+                "setup_message": "" if drive.configured() else drive.missing_setup_message(),
+                "safety": "Permanent deletion is not available; trash only moves files to Google Drive trash.",
+            }, ensure_ascii=False, indent=2)
+
+        missing = drive.missing_setup_message()
+        if missing:
+            return f"ERROR: {missing}"
+
+        read_actions = {"about", "list", "search", "metadata", "download", "open_web"}
+        write_actions = {"upload", "update_content", "rename", "move", "copy", "create_folder", "trash", "untrash"}
+        if action in read_actions:
+            allowed, err = self._ensure_capability_allowed(
+                "network",
+                "אישור גישה ל-Google Drive",
+                f"פעולה: {action}",
+                risk="medium",
+            )
+            if not allowed:
+                return err
+        if action in write_actions:
+            allowed, err = self._ensure_capability_allowed(
+                "file_write",
+                "אישור שינוי ב-Google Drive",
+                f"פעולה: {action}\nקובץ: {args.get('file_id', '')}\nשם/נתיב: {args.get('name') or args.get('path') or ''}\n\nמחיקה לצמיתות חסומה; פעולת trash מעבירה לאשפה בלבד.",
+                risk="high",
+            )
+            if not allowed:
+                return err
+
+        try:
+            if action == "about":
+                return json.dumps(drive.about(), ensure_ascii=False, indent=2)
+            if action in {"list", "search"}:
+                files = drive.list_files(
+                    query=args.get("query", "") if action == "search" else args.get("query", ""),
+                    page_size=args.get("page_size", 25),
+                    include_trashed=bool(args.get("include_trashed", False)),
+                    folder_id=str(args.get("folder_id", "") or ""),
+                )
+                return json.dumps({"count": len(files), "files": files}, ensure_ascii=False, indent=2)
+            if action == "metadata":
+                file_id = str(args.get("file_id", "") or "")
+                if not file_id:
+                    return "ERROR: metadata requires file_id."
+                return json.dumps(drive.get_metadata(file_id), ensure_ascii=False, indent=2)
+            if action == "download":
+                file_id = str(args.get("file_id", "") or "")
+                if not file_id:
+                    return "ERROR: download requires file_id."
+                output_dir = str(args.get("output_dir", "") or "").strip()
+                if output_dir:
+                    output_dir = os.path.abspath(output_dir)
+                    allowed, err = self._ensure_write_allowed(output_dir, "שמירת קובץ שהורד מ-Google Drive")
+                    if not allowed:
+                        return err
+                result = drive.download_file(file_id, output_dir or attachment_cache_dir(getattr(self, "active_chat_session_id", "") or "drive"))
+                attachment = result.get("attachment")
+                if not attachment:
+                    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+                return "ATTACHMENT_JSON:" + json.dumps(attachment, ensure_ascii=False)
+            if action == "upload":
+                path = str(args.get("path", "") or "")
+                if not path:
+                    return "ERROR: upload requires path."
+                allowed, err = self._ensure_cloud_upload_allowed(path)
+                if not allowed:
+                    return err
+                return json.dumps(drive.upload_file(path, parent_id=str(args.get("folder_id", "") or ""), name=str(args.get("name", "") or "")), ensure_ascii=False, indent=2)
+            if action == "update_content":
+                file_id = str(args.get("file_id", "") or "")
+                path = str(args.get("path", "") or "")
+                if not file_id or not path:
+                    return "ERROR: update_content requires file_id and path."
+                allowed, err = self._ensure_cloud_upload_allowed(path)
+                if not allowed:
+                    return err
+                return json.dumps(drive.update_file_content(file_id, path, name=str(args.get("name", "") or "")), ensure_ascii=False, indent=2)
+            if action == "rename":
+                if not args.get("file_id") or not args.get("name"):
+                    return "ERROR: rename requires file_id and name."
+                return json.dumps(drive.rename(args.get("file_id"), args.get("name")), ensure_ascii=False, indent=2)
+            if action == "move":
+                if not args.get("file_id") or not args.get("folder_id"):
+                    return "ERROR: move requires file_id and folder_id."
+                return json.dumps(drive.move(args.get("file_id"), args.get("folder_id")), ensure_ascii=False, indent=2)
+            if action == "copy":
+                if not args.get("file_id"):
+                    return "ERROR: copy requires file_id."
+                return json.dumps(drive.copy(args.get("file_id"), name=str(args.get("name", "") or ""), parent_id=str(args.get("folder_id", "") or "")), ensure_ascii=False, indent=2)
+            if action == "create_folder":
+                if not args.get("name"):
+                    return "ERROR: create_folder requires name."
+                return json.dumps(drive.create_folder(args.get("name"), parent_id=str(args.get("folder_id", "") or "")), ensure_ascii=False, indent=2)
+            if action == "trash":
+                if not args.get("file_id"):
+                    return "ERROR: trash requires file_id."
+                return json.dumps(drive.trash(args.get("file_id"), True), ensure_ascii=False, indent=2)
+            if action == "untrash":
+                if not args.get("file_id"):
+                    return "ERROR: untrash requires file_id."
+                return json.dumps(drive.trash(args.get("file_id"), False), ensure_ascii=False, indent=2)
+            if action == "open_web":
+                if not args.get("file_id"):
+                    return "ERROR: open_web requires file_id."
+                return json.dumps(drive.open_web(args.get("file_id")), ensure_ascii=False, indent=2)
+            return f"ERROR: Unsupported google_drive_manager action: {action}"
+        except Exception as e:
+            return f"ERROR: Google Drive {action} failed: {e}"
+
+    def _append_attachment_tool_feedback(self, current_messages, ai_response_text, action, payload):
+        try:
+            item = normalize_attachment(json.loads(str(payload or "")))
+        except Exception as e:
+            self._append_tool_feedback(current_messages, ai_response_text, action, f"ERROR: Invalid attachment payload: {e}")
+            return
+        manifest = attachment_manifest_text([item])
+        self.conversation_attachments = merge_conversation_attachments(
+            getattr(self, "conversation_attachments", []),
+            [item],
+            self.settings.get("conversation_attachments_limit", 80),
+        )
+        if self.mode == "gemini":
+            message = self._build_user_message_with_attachments(f"Tool attached a local file for analysis.\n\n{manifest}", [item])
+            current_messages.append({"role": "model", "parts": [{"text": ai_response_text}]})
+            current_messages.append(message)
+        else:
+            message = self._build_user_message_with_attachments(f"Tool attached a local file for analysis.\n\n{manifest}", [item])
+            current_messages.append({"role": "assistant", "content": ai_response_text})
+            current_messages.append(message)
+
+    def send_message(self, user_text, is_background_task=False, cancel_event=None, attachments=None):
         lock_acquired = self._agent_lock.acquire(blocking=False)
         if not lock_acquired:
             return "ERROR_USER: סמארטי כבר מבצע משימה אחרת. נסה שוב בעוד רגע או בטל את הפעולה הפעילה."
@@ -5173,10 +5483,20 @@ CWD: {current_dir}
         current_model = ""
         task_state = None
         try:
+            user_text = str(user_text or "")
+            attachments = normalize_attachments(attachments or [])
+            if attachments:
+                self.conversation_attachments = merge_conversation_attachments(
+                    getattr(self, "conversation_attachments", []),
+                    attachments,
+                    self.settings.get("conversation_attachments_limit", 80),
+                )
+            current_manifest = attachment_manifest_text(attachments, title="Files attached to this turn")
+            history_user_text = (user_text + ("\n\n" + current_manifest if current_manifest else "")).strip()
             self._execution_context.is_background = is_background_task
             self._execution_context.cancel_event = run_cancel_event
             self._execution_context.current_task_id = uuid.uuid4().hex[:12]
-            self._execution_context.current_task_objective = str(user_text or "")[:700]
+            self._execution_context.current_task_objective = (history_user_text or user_text)[:700]
             if not is_background_task:
                 self._foreground_cancel_event = run_cancel_event
                 self.cancel_event = run_cancel_event
@@ -5186,7 +5506,7 @@ CWD: {current_dir}
                 return final_response
             try:
                 if getattr(self, "memory_manager", None):
-                    self.memory_manager.capture_critical_user_details(user_text, source="critical_preflight")
+                    self.memory_manager.capture_critical_user_details(history_user_text or user_text, source="critical_preflight")
             except Exception as e:
                 logging.warning(f"Critical memory capture skipped: {e}")
 
@@ -5207,17 +5527,17 @@ CWD: {current_dir}
 
             logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
             if getattr(self, "agent_runtime", None):
-                self.agent_runtime.trace("plan", user_text[:1000])
+                self.agent_runtime.trace("plan", (history_user_text or user_text)[:1000])
 
-            task_state = self._initialize_direct_task_state(user_text)
+            task_state = self._initialize_direct_task_state(history_user_text or user_text)
 
             if self.mode == "gemini":
                 current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
-                current_messages.append({"role": "user", "parts": [{"text": user_text}]})
+                current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
             else:
                 history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
                 current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
-                current_messages.append({"role": "user", "content": user_text})
+                current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
                 if run_cancel_event.is_set():
@@ -5442,7 +5762,7 @@ CWD: {current_dir}
             should_verify_final = self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
             if should_verify_final and not run_cancel_event.is_set():
                 try:
-                    final_response = self._verify_final_response(user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
+                    final_response = self._verify_final_response(history_user_text or user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
                 except SmartiCancelled:
                     final_response = "הפעולה נעצרה לבקשת המשתמש."
                 final_response = self._strip_internal_artifacts(final_response)
@@ -5457,7 +5777,7 @@ CWD: {current_dir}
                     new_tool_observations = list((getattr(self, "tool_observations", []) or [])[tool_observation_start:])
                     if getattr(self, "memory_manager", None):
                         self.memory_manager.auto_capture_turn(
-                            user_text,
+                            history_user_text or user_text,
                             final_response,
                             tool_records=new_tool_observations,
                             is_background_task=is_background_task,
@@ -5467,12 +5787,12 @@ CWD: {current_dir}
 
             if final_response and not final_response.startswith("ERROR_USER") and not is_background_task:
                 if self.mode == "gemini":
-                    self.gemini_history.append({"role": "user", "content": user_text})
+                    self.gemini_history.append({"role": "user", "content": history_user_text or user_text})
                     self.gemini_history.append({"role": "model", "content": final_response})
                 else:
                     self.universal_history = [m for m in self.universal_history if m.get("role") != "system"]
                     self.universal_history.insert(0, {"role": "system", "content": self.system_prompt})
-                    self.universal_history.append({"role": "user", "content": user_text})
+                    self.universal_history.append({"role": "user", "content": history_user_text or user_text})
                     self.universal_history.append({"role": "assistant", "content": final_response})
                 self._compact_conversation_history()
 
@@ -5493,7 +5813,7 @@ CWD: {current_dir}
         finally:
             if not is_background_task and final_response and not chat_turn_recorded:
                 try:
-                    self._record_active_chat_turn(user_text, final_response)
+                    self._record_active_chat_turn(user_text, final_response, attachments=attachments)
                     chat_turn_recorded = True
                 except Exception as e:
                     logging.warning(f"Chat turn persistence failed: {e}")
@@ -6866,6 +7186,8 @@ else:
         sandbox_blocked, sandbox_err = self._sandbox_blocks_unconstrained_tool(action)
         if sandbox_blocked:
             return (sandbox_err, None)
+        if action == "attach_local_file":
+            return (self.attach_local_file_tool(args_dict.get("path", "")), None)
         if action in {"search_mcp", "install_mcp", "run_mcp"} and not self.settings.get("enable_mcp_clawhub", False):
             return ("ERROR: MCP is disabled by user settings. Do not use MCP unless the user enables it.", None)
         if action in {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill"} and not self.settings.get("enable_skills_beta", True):

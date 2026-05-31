@@ -570,12 +570,12 @@ BUILTIN_TOOL_SCHEMAS["software_manager"] = {
 }
 
 BUILTIN_TOOL_SCHEMAS["file_manager"] = {
-    "description": "Unified file tool for safe open, text save, document read, filename search, content search, OCR, and moving files/folders to the recycle bin.",
+    "description": "Unified file tool for safe open, text save, document read, filename search, content search, OCR, attaching local files to model context, and moving files/folders to the recycle bin.",
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["open", "save_text", "read_document", "search_files", "search_content", "extract_image_text", "trash"], "description": "File operation. Use trash for delete requests; it moves to Recycle Bin."},
-            "path": {"type": "string", "description": "File/folder path for open, save_text, read_document, extract_image_text, or trash."},
+            "action": {"type": "string", "enum": ["open", "save_text", "read_document", "search_files", "search_content", "extract_image_text", "attach", "trash"], "description": "File operation. Use attach to send a local file into the next model turn when the active provider supports it. Use trash for delete requests; it moves to Recycle Bin."},
+            "path": {"type": "string", "description": "File/folder path for open, save_text, read_document, extract_image_text, attach, or trash."},
             "content": {"type": "string", "description": "Text content for save_text."},
             "query": {"type": "string", "description": "Filename query for search_files."},
             "directory": {"type": "string", "description": "Directory for search_content."},
@@ -671,6 +671,10 @@ BUILTIN_TOOL_SCHEMAS["extension_manager"] = {
     }
 }
 
+# Google Drive is parked until the OAuth flow is reliable enough for end users.
+# Keep the implementation in smarti/google_drive.py and SmartiCore.google_drive_manager
+# for a future re-enable, but do not register it as a visible/built-in tool now.
+
 BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
     "description": "Unified automation tool for Smarti browser automation and Windows computer automation.",
     "inputSchema": {
@@ -704,7 +708,7 @@ BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
-    "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text, trash-to-Recycle-Bin.",
+    "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text, attach local files to context, trash-to-Recycle-Bin.",
     "web_manager": "Unified web: search, read, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
@@ -840,6 +844,9 @@ DEFAULT_SETTINGS = {
     "preserve_current_task_tool_context": True,
     "max_inline_tool_feedback_chars": 16000,
     "max_inline_tool_error_chars": 8000,
+    "attachment_inline_max_mb": 20,
+    "attachment_text_excerpt_chars": 10000,
+    "conversation_attachments_limit": 80,
     "max_parallel_tool_calls": 4,
     "recent_tool_observations_limit": 40,
     "tool_context_transcript": [],

@@ -11,10 +11,11 @@ class AgentWorker(QThread):
     api_key_required_signal = pyqtSignal(str, str, str, str, str)
     step_signal = pyqtSignal(str)
 
-    def __init__(self, core, user_text):
+    def __init__(self, core, user_text, attachments=None):
         super().__init__()
         self.core = core
         self.user_text = user_text
+        self.attachments = attachments or []
         self.confirm_event = threading.Event()
         self.confirm_result = False
         self.api_key_event = threading.Event()
@@ -47,7 +48,7 @@ class AgentWorker(QThread):
             api_key_cb=self.ask_api_key_gui
         )
         try:
-            response = self.core.send_message(self.user_text)
+            response = self.core.send_message(self.user_text, attachments=self.attachments)
         except Exception as e:
             logging.exception("Agent worker crashed unexpectedly.")
             self.core._recover_after_agent_crash()
