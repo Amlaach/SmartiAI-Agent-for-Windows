@@ -26,6 +26,28 @@ def create_back_button(target_page_func):
     btn.clicked.connect(target_page_func)
     return btn
 
+def high_contrast_link_color():
+    return "#FFF2A8" if CURRENT_THEME == "dark" else "#004E66"
+
+def high_contrast_link_markup(url, text):
+    color = high_contrast_link_color()
+    safe_url = html.escape(str(url or ""), quote=True)
+    safe_text = html.escape(str(text or ""))
+    style = f"color: {color}; text-decoration: underline; font-weight: 800;"
+    return f'<a href="{safe_url}" style="{style}"><span style="{style}">{safe_text}</span></a>'
+
+def apply_high_contrast_link_label(label, size=12):
+    color = high_contrast_link_color()
+    label.setProperty("smartiHighContrastLink", True)
+    label.setStyleSheet(
+        f"QLabel {{ background: transparent; color: {color}; font-size: {int(size)}px; font-weight: 800; }}"
+        f"a {{ color: {color}; text-decoration: underline; font-weight: 800; }}"
+    )
+    palette = label.palette()
+    palette.setColor(QPalette.ColorRole.Link, QColor(color))
+    palette.setColor(QPalette.ColorRole.LinkVisited, QColor(color))
+    label.setPalette(palette)
+
 BUILTIN_TOOL_DISPLAY_LABELS = {
     "get_tool_info": "מידע על כלי וסכמות",
     "system_manager": "ניהול מערכת",
@@ -159,10 +181,10 @@ class ApiKeyRequiredDialog(QDialog):
         layout.addWidget(self.api_key_edit)
 
         if help_url:
-            link = QLabel(f'<a href="{html.escape(str(help_url), quote=True)}">פתח דף הנפקת מפתחות API</a>')
+            link = QLabel(high_contrast_link_markup(help_url, "פתח דף הנפקת מפתחות API"))
             link.setOpenExternalLinks(True)
             link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-            link.setStyleSheet(f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}")
+            apply_high_contrast_link_label(link)
             layout.addWidget(link)
 
         instructions = provider_key_instructions(secret_key=secret_key)
@@ -792,16 +814,14 @@ class SettingsPage(QWidget):
         link_label.setTextFormat(Qt.TextFormat.RichText)
         link_label.setOpenExternalLinks(True)
         link_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        link_label.setStyleSheet(
-            f"QLabel {{ background: transparent; color: {ACCENT_COLOR}; font-size: 12px; font-weight: 800; }}"
-            f"a {{ color: {ACCENT_COLOR}; text-decoration: underline; }}"
-        )
+        apply_high_contrast_link_label(link_label)
         layout.addWidget(edit, 1)
         layout.addWidget(link_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
     def _set_external_link(self, label, url, text):
-        label.setText(f'<a href="{html.escape(str(url or ""), quote=True)}">{html.escape(str(text or ""))}</a>' if url else "")
+        apply_high_contrast_link_label(label)
+        label.setText(high_contrast_link_markup(url, text) if url else "")
         label.setVisible(bool(url))
 
     def _update_provider_key_help(self):
@@ -963,7 +983,7 @@ class SettingsPage(QWidget):
         self.tts_cb.stateChanged.connect(lambda state: self.tts_voice_cb.setChecked(True) if state == 2 else None)
 
         self.insecure_ssl_cb = SmartiCheckBox("אפשר תאימות SSL לכלים חיצוניים (פחות בטוח)")
-        self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", False))
+        self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", True))
         self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
         self.cloud_upload_cb.setChecked(self.core.settings.get("require_approval_for_cloud_upload", True))
@@ -1189,7 +1209,7 @@ class SettingsPage(QWidget):
         voice.addStretch()
 
         self._add_internal_back(advanced, "מתקדם")
-        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פחות בטוח, ולכן מומלץ להשאיר כבוי אלא אם יש בעיית חיבור ידועה.")
+        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.")
         self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.")
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.")
         self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.")
@@ -1284,7 +1304,7 @@ class SettingsPage(QWidget):
             text,
             self.api_key_edit.secret(),
             self.core.settings.get("local_server_url", ""),
-            self.core.settings.get("allow_insecure_ssl_compat", False)
+            self.core.settings.get("allow_insecure_ssl_compat", True)
         )
         self.fetch_worker.finished_signal.connect(lambda models: self.populate_models(models, text))
         self.fetch_worker.start()
@@ -1394,7 +1414,7 @@ class SettingsPage(QWidget):
             provider,
             key,
             self.local_url.text().strip() or self.core.settings.get("local_server_url", ""),
-            self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", False),
+            self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", True),
         )
         self.api_key_validation_worker = worker
         worker.finished_signal.connect(lambda p, k, ok, msg, models, gen=generation: self._on_api_key_validation_finished(gen, p, k, ok, msg, models))
@@ -1451,6 +1471,9 @@ class SettingsPage(QWidget):
         self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.back_btn.setStyleSheet(ghost_button_css())
         for label in self.findChildren(QLabel):
+            if label.property("smartiHighContrastLink"):
+                apply_high_contrast_link_label(label)
+                continue
             if label is getattr(self, "loops_val_lbl", None):
                 continue
             style = label.styleSheet() or ""
@@ -1498,6 +1521,10 @@ class SettingsPage(QWidget):
             """)
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
+        if hasattr(self, "api_key_help_link"):
+            self._update_provider_key_help()
+        if hasattr(self, "tavily_key_help_link"):
+            self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
         self._refresh_developer_log_buttons()
 
     def _apply_profile_to_widgets(self, profile_key):

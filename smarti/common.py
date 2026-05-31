@@ -236,11 +236,11 @@ class SmartiCancelled(Exception):
     pass
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout,
-                             QHBoxLayout, QTextEdit, QPushButton, QLabel, 
-                             QScrollArea, QFrame, QMenu, QLineEdit, 
-                             QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox)
+                             QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
+                             QScrollArea, QFrame, QMenu, QLineEdit,
+                             QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF
-from PyQt6.QtGui import QIcon, QFont, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage
+from PyQt6.QtGui import QIcon, QFont, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage
 
 DOCX_INSTALLED = importlib.util.find_spec("docx") is not None
 PDF_INSTALLED = importlib.util.find_spec("PyPDF2") is not None
@@ -284,6 +284,7 @@ LEGACY_SETTINGS_FILE = os.path.join(APP_DIR, "smarti_settings.json")
 LEGACY_USAGE_FILE = os.path.join(APP_DIR, "smarti_usage.json")
 LEGACY_MEMORY_FILE = os.path.join(APP_DIR, "smarti_memory.json")
 LEGACY_MEMORY_EXPORT_FILE = os.path.join(APP_DIR, "smarti_memory.md")
+LEGACY_CHAT_HISTORY_FILE = os.path.join(APP_DIR, "smarti_chats.json")
 LEGACY_TOOLS_DIR = os.path.join(APP_DIR, "custom_tools")
 LEGACY_MCP_TOOLS_DIR = os.path.join(APP_DIR, "mcp_tools")
 LEGACY_SKILLS_DIR = os.path.join(APP_DIR, "skills")
@@ -295,6 +296,7 @@ SETTINGS_FILE = os.path.join(USER_DATA_DIR, "smarti_settings.json")
 USAGE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage.json")
 MEMORY_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.json")
 MEMORY_EXPORT_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.md")
+CHAT_HISTORY_FILE = os.path.join(USER_DATA_DIR, "smarti_chats.json")
 TOOLS_DIR = os.path.join(USER_DATA_DIR, "custom_tools")
 MCP_TOOLS_DIR = os.path.join(USER_DATA_DIR, "mcp_tools")
 SKILLS_DIR = os.path.join(USER_DATA_DIR, "skills")
@@ -461,6 +463,7 @@ DESTRUCTIVE_COMMAND_HINTS = [
 SELF_PROTECTED_NAMES = {
     "mcp_tools", "custom_tools", "skills", "assets", "smarti_outputs",
     "smarti_core.pyw", "smarti_settings.json", "smarti_memory.json",
+    "smarti_chats.json",
     "smarti_memory.md", "smarti_agent.log"
 }
 

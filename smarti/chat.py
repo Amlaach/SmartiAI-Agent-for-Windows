@@ -4,6 +4,9 @@ from .ui_styles import *
 from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage
+from .history import DEFAULT_CHAT_TITLE
+
+WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
 def _asset_icon(*filenames):
     for filename in filenames:
@@ -13,6 +16,13 @@ def _asset_icon(*filenames):
             if not icon.isNull():
                 return icon
     return QIcon()
+
+def _asset_path(*filenames):
+    for filename in filenames:
+        path = os.path.join(ASSETS_DIR, filename)
+        if os.path.exists(path):
+            return path.replace("\\", "/")
+    return ""
 
 def _escape_with_soft_breaks(text):
     raw = html.unescape(str(text or ""))
@@ -73,6 +83,200 @@ def _sanitize_rendered_links(rendered_html, link_color=None):
     rendered_html = re.sub(r'<a\s+[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', repl, str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
     rendered_html = re.sub(r'<a\s+[^>]*href\s*=\s*[^>]*>\s*</a>', '', rendered_html, flags=re.IGNORECASE | re.DOTALL)
     return rendered_html
+
+def _code_language_from_attrs(attrs):
+    attrs = str(attrs or "")
+    match = re.search(r'class=(["\'])([^"\']*?language-([^"\']+))\1', attrs, flags=re.IGNORECASE)
+    if not match:
+        return "text"
+    lang = html.unescape(match.group(3)).strip()
+    lang = re.sub(r"[^A-Za-z0-9_+#.\-]+", "", lang)
+    return lang.lower() or "text"
+
+def _code_copy_icon_src():
+    return _asset_path(
+        f"code_copy_icon_{CURRENT_THEME}.png", f"code_copy_icon_{CURRENT_THEME}.svg",
+        "code_copy_icon.png", "code_copy_icon.svg",
+        f"copy_icon_{CURRENT_THEME}.png", f"copy_icon_{CURRENT_THEME}.svg",
+        "copy_icon.png", "copy_icon.svg"
+    )
+
+CODE_LANGUAGE_EXTENSIONS = {
+    "bash": ".sh", "shell": ".sh", "sh": ".sh", "zsh": ".sh",
+    "powershell": ".ps1", "pwsh": ".ps1", "ps1": ".ps1",
+    "python": ".py", "py": ".py",
+    "javascript": ".js", "js": ".js",
+    "typescript": ".ts", "ts": ".ts",
+    "tsx": ".tsx", "jsx": ".jsx",
+    "html": ".html", "css": ".css", "scss": ".scss",
+    "json": ".json", "jsonc": ".jsonc",
+    "yaml": ".yaml", "yml": ".yml",
+    "xml": ".xml", "sql": ".sql",
+    "java": ".java", "kotlin": ".kt", "kt": ".kt",
+    "c": ".c", "cpp": ".cpp", "c++": ".cpp", "cc": ".cc", "h": ".h", "hpp": ".hpp",
+    "csharp": ".cs", "cs": ".cs",
+    "go": ".go", "rust": ".rs", "rs": ".rs",
+    "php": ".php", "ruby": ".rb", "rb": ".rb",
+    "swift": ".swift", "dart": ".dart", "r": ".r",
+    "markdown": ".md", "md": ".md",
+    "text": ".txt", "txt": ".txt",
+}
+
+def _clean_code_language(value):
+    lang = html.unescape(str(value or "")).strip().split()[0] if str(value or "").strip() else "text"
+    lang = re.sub(r"[^A-Za-z0-9_+#.\-]+", "", lang).lower()
+    return lang or "text"
+
+def _code_extension(language):
+    language = _clean_code_language(language)
+    return CODE_LANGUAGE_EXTENSIONS.get(language, ".txt")
+
+def _code_display_language(language):
+    language = _clean_code_language(language)
+    display = {
+        "py": "Python",
+        "js": "JavaScript",
+        "ts": "TypeScript",
+        "tsx": "TSX",
+        "jsx": "JSX",
+        "csharp": "C#",
+        "cs": "C#",
+        "cpp": "C++",
+        "c++": "C++",
+        "json": "JSON",
+        "html": "HTML",
+        "css": "CSS",
+        "sql": "SQL",
+        "xml": "XML",
+        "yaml": "YAML",
+        "yml": "YAML",
+        "md": "Markdown",
+        "markdown": "Markdown",
+        "powershell": "PowerShell",
+        "pwsh": "PowerShell",
+        "bash": "Bash",
+        "sh": "Shell",
+        "shell": "Shell",
+    }.get(language)
+    return display or language.replace("-", " ").replace("_", " ").title()
+
+def _split_markdown_code_blocks(text):
+    text = str(text or "")
+    pattern = re.compile(r"```([^\n`]*)\n?(.*?)```", re.DOTALL)
+    parts = []
+    last = 0
+    for match in pattern.finditer(text):
+        if match.start() > last:
+            parts.append(("text", text[last:match.start()], ""))
+        language = _clean_code_language(match.group(1))
+        code = match.group(2)
+        if code.endswith("\n"):
+            code = code[:-1]
+        parts.append(("code", code, language))
+        last = match.end()
+    if last < len(text):
+        parts.append(("text", text[last:], ""))
+    return parts or [("text", text, "")]
+
+def _style_markdown_blocks(rendered_html, is_user=False, code_blocks=None):
+    fg = BUBBLE_USER_TEXT if is_user else TEXT_COLOR
+    muted = BUBBLE_USER_TEXT if is_user else MUTED_TEXT_COLOR
+    code_bg = "rgba(3,19,29,0.18)" if is_user else CODE_BG_COLOR
+    header_bg = "rgba(3,19,29,0.16)" if is_user else ACCENT_TINT
+    border = "rgba(3,19,29,0.24)" if is_user else SOFT_LINE_COLOR
+
+    html_text = str(rendered_html or "")
+    copy_icon = _code_copy_icon_src()
+
+    def repl_code_block(match):
+        attrs = match.group(1) or ""
+        code_html = match.group(2) or ""
+        language = _code_language_from_attrs(attrs)
+        clean_code = html.unescape(code_html).replace("\u200b", "")
+        copy_index = None
+        if isinstance(code_blocks, list):
+            copy_index = len(code_blocks)
+            code_blocks.append(clean_code)
+        copy_link = ""
+        if copy_index is not None:
+            if copy_icon:
+                copy_link = (
+                    f'<a href="smarti-copy-code:{copy_index}" style="text-decoration:none;">'
+                    f'<img src="{html.escape(copy_icon, quote=True)}" width="16" height="16" /></a>'
+                )
+            else:
+                copy_link = f'<a href="smarti-copy-code:{copy_index}" style="color:{fg}; text-decoration:none; font-weight:800;">Copy</a>'
+        header = (
+            f'<div dir="ltr" align="left" style="background-color:{header_bg}; color:{muted}; '
+            f'border:1px solid {border}; border-bottom:0; padding:7px 12px; margin:8px 0 0 0;">'
+            '<table width="100%" cellspacing="0" cellpadding="0" style="border:0; margin:0;">'
+            f'<tr><td align="left" style="border:0; color:{muted}; font-family:Segoe UI, Arial; font-size:12px; font-weight:700;">{html.escape(language)}</td>'
+            f'<td align="right" style="border:0;">{copy_link}</td></tr></table></div>'
+        )
+        body = (
+            f'<pre dir="ltr" align="left" style="background-color:{code_bg}; color:{fg}; '
+            f'border:1px solid {border}; border-top:0; padding:16px 18px; margin:0 0 9px 0; '
+            'white-space:pre-wrap; text-align:left; direction:ltr; unicode-bidi:embed;">'
+            f'<code{attrs} style="font-family:Consolas, Courier New, monospace; font-size:13px; '
+            f'line-height:1.45; color:{fg}; background:transparent; text-align:left; direction:ltr; unicode-bidi:embed;">'
+            f'{code_html}</code></pre>'
+        )
+        return header + body
+
+    html_text = re.sub(
+        r"<pre><code([^>]*)>(.*?)</code></pre>",
+        repl_code_block,
+        html_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    html_text = re.sub(
+        r"<code(?![^>]*style=)([^>]*)>",
+        (
+            f'<code\\1 style="font-family:Consolas, Courier New, monospace; font-size:13px; '
+            f'background-color:{code_bg}; color:{fg}; padding:2px 4px; border-radius:4px;">'
+        ),
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    html_text = re.sub(
+        r"<table>",
+        (
+            f'<table cellspacing="0" cellpadding="6" style="border-collapse:collapse; '
+            f'border:1px solid {border}; margin:7px 0; color:{fg};">'
+        ),
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    html_text = re.sub(
+        r"<th>",
+        f'<th style="background-color:{header_bg}; color:{fg}; border:1px solid {border}; font-weight:700;">',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    html_text = re.sub(
+        r"<td>",
+        f'<td style="border:1px solid {border}; color:{fg};">',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    html_text = re.sub(
+        r"<blockquote>",
+        f'<blockquote style="border-right:3px solid {border}; color:{muted}; margin:6px 0; padding:3px 10px;">',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    return html_text
+
+def _soft_break_rendered_text(rendered_html):
+    segments = re.split(r"(<pre\b.*?</pre>)", str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
+    rendered = []
+    for segment in segments:
+        if re.match(r"<pre\b", segment or "", flags=re.IGNORECASE):
+            rendered.append(segment)
+            continue
+        parts = re.split(r"(<[^>]+>)", segment)
+        rendered.append("".join(part if part.startswith("<") and part.endswith(">") else _escape_with_soft_breaks(part) for part in parts))
+    return "".join(rendered)
 
 def _clean_step_for_display(text):
     clean = html.unescape(str(text or "")).strip()
@@ -143,6 +347,156 @@ class PinnedActionButtonHost(QWidget):
         layout.addStretch(1)
         layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
 
+class CodeBlockWidget(QFrame):
+    def __init__(self, code, language="text", parent_width=450):
+        super().__init__()
+        self.code = str(code or "")
+        self.language = _clean_code_language(language)
+        self.max_w = max(220, int(parent_width or 450))
+        self.setObjectName("CodeBlockWidget")
+        self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMaximumWidth(self.max_w)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 16)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+
+        self.copy_btn = self._make_icon_button(
+            "העתק קוד",
+            (
+                f"code_copy_icon_{CURRENT_THEME}.png", f"code_copy_icon_{CURRENT_THEME}.svg",
+                "code_copy_icon.png", "code_copy_icon.svg",
+                f"copy_icon_{CURRENT_THEME}.png", f"copy_icon_{CURRENT_THEME}.svg",
+                "copy_icon.png", "copy_icon.svg",
+            ),
+            "⧉",
+        )
+        self.copy_btn.clicked.connect(self.copy_code)
+        self.download_btn = self._make_icon_button(
+            "הורד קובץ",
+            (
+                f"code_download_icon_{CURRENT_THEME}.png", f"code_download_icon_{CURRENT_THEME}.svg",
+                "code_download_icon.png", "code_download_icon.svg",
+                f"download_icon_{CURRENT_THEME}.png", f"download_icon_{CURRENT_THEME}.svg",
+                "download_icon.png", "download_icon.svg",
+            ),
+            "↓",
+        )
+        self.download_btn.clicked.connect(self.download_code)
+        header.addWidget(self.copy_btn)
+        header.addWidget(self.download_btn)
+        header.addStretch(1)
+
+        self.language_lbl = QLabel(_code_display_language(self.language))
+        self.language_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.language_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.language_lbl.setStyleSheet("border: none; background: transparent;")
+        header.addWidget(self.language_lbl)
+        layout.addLayout(header)
+
+        self.code_edit = QPlainTextEdit()
+        self.code_edit.setPlainText(self.code)
+        self.code_edit.setReadOnly(True)
+        self.code_edit.setFrameShape(QFrame.Shape.NoFrame)
+        self.code_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.code_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.code_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.code_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.code_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        option = self.code_edit.document().defaultTextOption()
+        option.setTextDirection(Qt.LayoutDirection.LeftToRight)
+        option.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.code_edit.document().setDefaultTextOption(option)
+        layout.addWidget(self.code_edit)
+
+        self.apply_theme()
+        self._sync_height()
+
+    def _make_icon_button(self, tooltip, filenames, fallback):
+        btn = QPushButton()
+        btn.setFixedSize(28, 28)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setToolTip(tooltip)
+        icon = _asset_icon(*filenames)
+        if not icon.isNull():
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(18, 18))
+        else:
+            btn.setText(fallback)
+        return btn
+
+    def _button_css(self):
+        return (
+            "QPushButton { background: transparent; border: none; border-radius: 14px; "
+            f"color: {TEXT_COLOR}; padding: 0px; font-size: 18px; font-weight: 800; }}"
+            f"QPushButton:hover {{ background: {ACCENT_TINT}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+        )
+
+    def apply_theme(self):
+        code_bg = "#121212" if CURRENT_THEME == "dark" else "#F4FAFC"
+        code_border = "rgba(255,255,255,0.05)" if CURRENT_THEME == "dark" else SOFT_LINE_COLOR
+        code_text = "#F6F7FA" if CURRENT_THEME == "dark" else "#062033"
+        muted = "#F6F7FA" if CURRENT_THEME == "dark" else TEXT_COLOR
+        selection = "rgba(76,202,252,0.28)" if CURRENT_THEME == "dark" else ACCENT_TINT_STRONG
+        self.setStyleSheet(
+            f"QFrame#CodeBlockWidget {{ background: {code_bg}; border: 1px solid {code_border}; border-radius: 24px; }}"
+        )
+        self.copy_btn.setStyleSheet(self._button_css())
+        self.download_btn.setStyleSheet(self._button_css())
+        self.language_lbl.setStyleSheet(
+            f"color: {muted}; font-size: 13px; font-weight: 800; border: none; background: transparent;"
+        )
+        font = QFont("Consolas", 11)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.code_edit.setFont(font)
+        self.code_edit.setStyleSheet(
+            f"QPlainTextEdit {{ background: transparent; color: {code_text}; border: none; "
+            "padding: 6px 0px 0px 0px; font-family: Consolas, 'Courier New', monospace; "
+            "font-size: 13px; line-height: 1.45; selection-background-color: "
+            f"{selection}; selection-color: {code_text}; }}"
+            "QPlainTextEdit viewport { background: transparent; }"
+            f"{SCROLLBAR_CSS}"
+        )
+
+    def _sync_height(self):
+        font_metrics = QFontMetrics(self.code_edit.font())
+        line_count = max(1, self.code.count("\n") + 1)
+        line_height = max(18, font_metrics.lineSpacing() + 3)
+        height = min(max(58, line_count * line_height + 20), 340)
+        self.code_edit.setFixedHeight(height)
+        self.setFixedHeight(height + 66)
+
+    def update_parent_width(self, parent_width):
+        self.max_w = max(220, int(parent_width or 450))
+        self.setMaximumWidth(self.max_w)
+        self._sync_height()
+
+    def copy_code(self):
+        QApplication.clipboard().setText(self.code)
+
+    def download_code(self):
+        ext = _code_extension(self.language)
+        default_path = os.path.join(OUTPUTS_DIR, f"smarti_code{ext}")
+        filter_label = f"{_code_display_language(self.language)} (*{ext});;All files (*.*)"
+        path, _ = QFileDialog.getSaveFileName(self, "שמירת קוד", default_path, filter_label)
+        if not path:
+            return
+        root, suffix = os.path.splitext(path)
+        if not suffix:
+            path = root + ext
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(self.code)
+        except Exception as e:
+            QMessageBox.warning(self, "שגיאה בשמירת קוד", str(e))
+
 class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, parent_width=450):
         super().__init__()
@@ -152,6 +506,7 @@ class MessageBubble(QFrame):
         self.main_layout.setContentsMargins(20, 16, 20, 16)
         self.max_w = int(parent_width * 0.76) - 30
         self.copy_text = str(text or "")
+        self.code_blocks = []
         
         self.steps_container = QWidget()
         self.steps_layout = QVBoxLayout(self.steps_container)
@@ -177,12 +532,21 @@ class MessageBubble(QFrame):
         self.final_label.setTextFormat(Qt.TextFormat.RichText)
         self.final_label.setWordWrap(True)
         self.final_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.final_label.setOpenExternalLinks(True)
+        self.final_label.setOpenExternalLinks(False)
+        self.final_label.linkActivated.connect(self._handle_link_activated)
         self.final_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.final_label.setMaximumWidth(self.max_w)
+        self.final_label.hide()
+
+        self.final_content = QWidget()
+        self.final_content.setStyleSheet("background: transparent; border: none;")
+        self.final_content.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.final_layout = QVBoxLayout(self.final_content)
+        self.final_layout.setContentsMargins(0, 0, 0, 0)
+        self.final_layout.setSpacing(8)
         
         self.main_layout.addWidget(self.steps_container)
-        self.main_layout.addWidget(self.final_label)
+        self.main_layout.addWidget(self.final_content)
         
         self.steps_text_html = ""
         self.is_expanded = True 
@@ -224,12 +588,16 @@ class MessageBubble(QFrame):
             f"pre {{ background-color: {CODE_BG_COLOR}; padding: 12px; border-radius: 14px; margin: 0; }}"
             f"p {{ margin: 0 0 5px 0; }}"
         )
+        for block in self.findChildren(CodeBlockWidget):
+            block.apply_theme()
         apply_soft_shadow(self, blur=22, y=7, alpha=30)
 
     def update_parent_width(self, parent_width):
         self.max_w = max(220, int(parent_width * 0.76) - 30)
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
+        for block in self.findChildren(CodeBlockWidget):
+            block.update_parent_width(self.max_w)
         self._refresh_layout()
 
     def _refresh_layout(self):
@@ -237,6 +605,60 @@ class MessageBubble(QFrame):
         parent = self.parentWidget()
         if parent:
             parent.updateGeometry()
+
+    def _handle_link_activated(self, href):
+        href = str(href or "")
+        if href.startswith("smarti-copy-code:"):
+            try:
+                index = int(href.split(":", 1)[1])
+                QApplication.clipboard().setText(self.code_blocks[index])
+            except Exception as e:
+                logging.warning(f"Copy code block failed: {e}")
+            return
+        href = _normalize_href(href)
+        if _is_valid_display_href(href):
+            webbrowser.open(href)
+
+    def _clear_final_layout(self):
+        while self.final_layout.count():
+            item = self.final_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                self.final_layout.removeWidget(widget)
+                widget.setParent(None)
+                if widget is not self.final_label:
+                    widget.deleteLater()
+
+    def _render_markdown_segment(self, segment):
+        text = str(segment or "").strip("\n")
+        if not text.strip():
+            return ""
+        if MARKDOWN_INSTALLED:
+            try:
+                import markdown
+                safe_markdown = html.escape(text, quote=False)
+                rendered_html = markdown.markdown(safe_markdown, extensions=['tables', 'nl2br', 'sane_lists'])
+                rendered_html = _sanitize_rendered_links(rendered_html, self._link_color())
+                rendered_html = _style_markdown_blocks(rendered_html, self.is_user, None)
+                return _soft_break_rendered_text(rendered_html)
+            except Exception:
+                pass
+        rendered_html = _escape_with_soft_breaks(text).replace('\n', '<br>')
+        return _sanitize_rendered_links(rendered_html, self._link_color())
+
+    def _new_text_label(self, rendered_html):
+        label = QLabel()
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setOpenExternalLinks(False)
+        label.linkActivated.connect(self._handle_link_activated)
+        label.setMaximumWidth(self.max_w)
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        if not str(rendered_html or "").lstrip().startswith("<"):
+            rendered_html = f"<span>{rendered_html}</span>"
+        label.setText(rendered_html)
+        return label
 
     def add_step(self, step_text):
         display_step = _clean_step_for_display(str(step_text or "").replace('\n', ' '))
@@ -257,21 +679,28 @@ class MessageBubble(QFrame):
         if not final_text: return
         display_text = _repair_markdown_links(html.unescape(str(final_text)))
         self.copy_text = display_text
+        self.code_blocks = []
         self.stop_steps_shimmer()
-        self.final_label.show()
-        if MARKDOWN_INSTALLED and not self.is_user:
-            try:
-                import markdown
-                safe_markdown = html.escape(display_text, quote=False)
-                rendered_html = markdown.markdown(safe_markdown, extensions=['fenced_code', 'tables', 'nl2br'])
-            except Exception:
-                rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
+        self._clear_final_layout()
+        self.final_content.show()
+        parts = _split_markdown_code_blocks(display_text)
+        has_code = any(kind == "code" for kind, _, _ in parts)
+        if not has_code:
+            rendered_html = self._render_markdown_segment(display_text)
+            self.final_label.setMaximumWidth(self.max_w)
+            self.final_label.setText(rendered_html if rendered_html.lstrip().startswith("<") else f"<span>{rendered_html}</span>")
+            self.final_label.show()
+            self.final_layout.addWidget(self.final_label)
         else:
-            rendered_html = _escape_with_soft_breaks(display_text).replace('\n', '<br>')
-        rendered_html = _sanitize_rendered_links(rendered_html, self._link_color())
-        if not rendered_html.lstrip().startswith("<"):
-            rendered_html = f"<span>{rendered_html}</span>"
-        self.final_label.setText(rendered_html)
+            self.final_label.hide()
+            for kind, content, language in parts:
+                if kind == "code":
+                    self.code_blocks.append(content)
+                    self.final_layout.addWidget(CodeBlockWidget(content, language, self.max_w))
+                else:
+                    rendered_html = self._render_markdown_segment(content)
+                    if rendered_html.strip():
+                        self.final_layout.addWidget(self._new_text_label(rendered_html))
         if self.steps_text_html: self.collapse_steps()
         self._refresh_layout()
 
@@ -642,6 +1071,266 @@ class QuickReplyToast(QWidget):
             return
         super().keyPressEvent(event)
 
+class ClickableSessionFrame(QFrame):
+    clicked = pyqtSignal(str)
+
+    def __init__(self, session_id):
+        super().__init__()
+        self.session_id = session_id
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.session_id)
+        super().mouseReleaseEvent(event)
+
+class ChatHistoryPage(QWidget):
+    def __init__(self, core, main_window):
+        super().__init__()
+        self.core = core
+        self.main_window = main_window
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        top_bar = QHBoxLayout()
+        back_btn = QPushButton()
+        back_btn.setFixedSize(38, 38)
+        back_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        back_btn.setToolTip("חזרה לצ'אט")
+        back_btn.setStyleSheet(icon_button_css(38))
+        back_icon = _asset_icon(f"back_icon_{CURRENT_THEME}.png", f"back_icon_{CURRENT_THEME}.svg", "back_icon.png", "back_icon.svg")
+        if not back_icon.isNull():
+            back_btn.setIcon(back_icon)
+            back_btn.setIconSize(QSize(24, 24))
+        else:
+            back_btn.setText("<")
+        back_btn.clicked.connect(lambda: self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page))
+        top_bar.addWidget(back_btn)
+
+        title = QLabel("שיחות")
+        title.setStyleSheet(page_title_css(19))
+        top_bar.addWidget(title)
+        top_bar.addStretch()
+
+        self.new_chat_btn = QPushButton("שיחה חדשה")
+        self.new_chat_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.new_chat_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        self.new_chat_btn.clicked.connect(self.start_new_chat)
+        top_bar.addWidget(self.new_chat_btn)
+        layout.addLayout(top_bar)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("חיפוש לפי שם או תוכן")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self.search_edit.textChanged.connect(self.load_sessions)
+        layout.addWidget(self.search_edit)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        self.content = QWidget()
+        self.content.setStyleSheet("background: transparent;")
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(0, 4, 0, 4)
+        self.content_layout.setSpacing(10)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.content)
+        layout.addWidget(self.scroll, 1)
+
+    def apply_theme(self):
+        self.new_chat_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        self.load_sessions()
+
+    def _format_time(self, value):
+        try:
+            dt = datetime.fromisoformat(str(value or ""))
+            return dt.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return str(value or "")
+
+    def _clear_rows(self):
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def load_sessions(self):
+        self._clear_rows()
+        query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
+        records = self.core.list_chat_sessions(query)
+        if not records:
+            empty = QLabel("לא נמצאו שיחות")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setStyleSheet(muted_label_css(14) + " padding: 24px;")
+            self.content_layout.addWidget(empty)
+            self.content_layout.addStretch()
+            return
+        active_id = self.core.active_chat_session().get("id", "")
+        for record in records:
+            self.content_layout.addWidget(self._session_row(record, active_id))
+        self.content_layout.addStretch()
+
+    def _icon_button(self, tooltip, filenames, fallback_text="", danger=False):
+        btn = QPushButton()
+        btn.setFixedSize(30, 30)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setToolTip(tooltip)
+        color = DANGER_COLOR if danger else ACCENT_COLOR
+        btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; color: {color}; "
+            "padding: 0px; font-size: 17px; font-weight: 800; }}"
+            "QPushButton:hover { background: transparent; border: none; }"
+            "QPushButton:pressed { background: transparent; border: none; }"
+        )
+        icon = _asset_icon(*filenames)
+        if not icon.isNull():
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(18, 18))
+            btn.setText("")
+        else:
+            btn.setText(fallback_text)
+        return btn
+
+    def _session_row(self, record, active_id):
+        session_id = record.get("id")
+        row = ClickableSessionFrame(session_id)
+        row.clicked.connect(self.open_session)
+        row.setStyleSheet(card_css(10, 8))
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(12, 10, 12, 10)
+        row_layout.setSpacing(7)
+
+        title_row = QHBoxLayout()
+        title = QLabel(record.get("title") or DEFAULT_CHAT_TITLE)
+        title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        title.setWordWrap(True)
+        title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px; font-weight: 800; border: none;")
+        title_row.addWidget(title, 1)
+
+        if record.get("id") == active_id:
+            active = QLabel("פעילה")
+            active.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            active.setStyleSheet(
+                f"background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: none; "
+                "border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 800;"
+            )
+            title_row.addWidget(active)
+        row_layout.addLayout(title_row)
+
+        preview = QLabel(record.get("preview", ""))
+        preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        preview.setWordWrap(True)
+        preview.setStyleSheet(muted_label_css(12) + " border: none;")
+        row_layout.addWidget(preview)
+
+        meta = QLabel(f"{self._format_time(record.get('updated_at'))} · {record.get('message_count', 0)} הודעות")
+        meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        meta.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px; border: none;")
+        row_layout.addWidget(meta)
+
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
+        pin_btn = self._icon_button(
+            "בטל הצמדה" if record.get("pinned") else "הצמד שיחה",
+            (
+                f"unpin_icon_{CURRENT_THEME}.png" if record.get("pinned") else f"pin_icon_{CURRENT_THEME}.png",
+                f"unpin_icon_{CURRENT_THEME}.svg" if record.get("pinned") else f"pin_icon_{CURRENT_THEME}.svg",
+                "unpin_icon.png" if record.get("pinned") else "pin_icon.png",
+                "unpin_icon.svg" if record.get("pinned") else "pin_icon.svg",
+            ),
+            fallback_text="★" if record.get("pinned") else "☆",
+        )
+        pin_btn.clicked.connect(lambda checked=False, sid=session_id, pinned=not record.get("pinned"): self.set_pinned(sid, pinned))
+        rename_btn = self._icon_button(
+            "שנה שם",
+            (f"rename_icon_{CURRENT_THEME}.png", f"rename_icon_{CURRENT_THEME}.svg", "rename_icon.png", "rename_icon.svg"),
+            fallback_text="✎",
+        )
+        rename_btn.clicked.connect(lambda checked=False, sid=session_id, current=record.get("title", ""): self.rename_session(sid, current))
+        export_btn = self._icon_button(
+            "יצוא JSON",
+            (f"export_json_icon_{CURRENT_THEME}.png", f"export_json_icon_{CURRENT_THEME}.svg", "export_json_icon.png", "export_json_icon.svg", "export_icon.png", "export_icon.svg"),
+            fallback_text="{}",
+        )
+        export_btn.clicked.connect(lambda checked=False, sid=session_id, title=record.get("title", ""): self.export_session(sid, title))
+        delete_btn = self._icon_button(
+            "מחק שיחה",
+            (f"delete_icon_{CURRENT_THEME}.png", f"delete_icon_{CURRENT_THEME}.svg", "delete_icon.png", "delete_icon.svg"),
+            fallback_text="×",
+            danger=True,
+        )
+        delete_btn.clicked.connect(lambda checked=False, sid=session_id: self.delete_session(sid))
+        for index, btn in enumerate((pin_btn, rename_btn, export_btn, delete_btn)):
+            actions.addWidget(btn, 0, index)
+        for col in range(4):
+            actions.setColumnStretch(col, 1)
+        row_layout.addLayout(actions)
+        return row
+
+    def start_new_chat(self):
+        self.main_window.start_new_chat()
+        self.load_sessions()
+
+    def open_session(self, session_id):
+        if self.main_window.agent_running:
+            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להחליף שיחה בזמן שסמארטי עדיין עובד.")
+            return
+        if self.core.activate_chat_session(session_id):
+            self.main_window.load_active_chat_session()
+            self.main_window.refresh_chat_title()
+            self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)
+
+    def set_pinned(self, session_id, pinned):
+        self.core.set_chat_session_pinned(session_id, pinned)
+        self.load_sessions()
+
+    def rename_session(self, session_id, current_title):
+        title, ok = QInputDialog.getText(self, "שינוי שם שיחה", "שם חדש:", text=current_title or DEFAULT_CHAT_TITLE)
+        if ok and title.strip():
+            self.core.rename_chat_session(session_id, title.strip())
+            if self.core.active_chat_session().get("id") == session_id:
+                self.main_window.refresh_chat_title()
+            self.load_sessions()
+
+    def export_session(self, session_id, title):
+        default_name = safe_filename(title or "smarti_chat", "smarti_chat") + ".json"
+        default_path = os.path.join(OUTPUTS_DIR, default_name)
+        path, _ = QFileDialog.getSaveFileName(self, "יצוא שיחה ל-JSON", default_path, "JSON (*.json)")
+        if not path:
+            return
+        try:
+            self.core.export_chat_session(session_id, path)
+            QMessageBox.information(self, "היצוא הושלם", f"השיחה יוצאה אל:\n{path}")
+        except Exception as e:
+            QMessageBox.warning(self, "שגיאת יצוא", str(e))
+
+    def delete_session(self, session_id):
+        if self.main_window.agent_running and self.core.active_chat_session().get("id") == session_id:
+            QMessageBox.information(self, "שיחה פעילה", "אי אפשר למחוק את השיחה הפעילה בזמן שסמארטי עובד.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "מחיקת שיחה",
+            "למחוק את השיחה הזו לצמיתות?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        was_active = self.core.active_chat_session().get("id") == session_id
+        if self.core.delete_chat_session(session_id):
+            if was_active:
+                self.main_window.load_active_chat_session()
+            self.load_sessions()
+
 class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
@@ -650,6 +1339,22 @@ class ChatWindow(QMainWindow):
         name = str(name).replace("-", " ").replace("_", " ")
         name = re.sub(r'(?i)\bpreview\b', '', name)
         return " ".join(name.split())
+
+    def active_chat_title(self):
+        try:
+            session = self.core.active_chat_session()
+            title = str(session.get("title", "") or "").strip()
+            if session.get("messages") and title and title != DEFAULT_CHAT_TITLE:
+                return title
+        except Exception:
+            pass
+        return "Smarti AI"
+
+    def refresh_chat_title(self):
+        title = self.active_chat_title()
+        if hasattr(self, "title_label"):
+            self.title_label.setText(title)
+        self.setWindowTitle(f"Smarti AI - {title}" if title != "Smarti AI" else "Smarti AI")
 
     def __init__(self, core):
         super().__init__()
@@ -716,10 +1421,11 @@ class ChatWindow(QMainWindow):
         self.usage_page = None
         self.task_center_page = None
         self.trace_page = None
+        self.history_page = None
         self.about_page = None
         
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
-        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False, show_actions=False)
+        self.load_active_chat_session()
         QTimer.singleShot(1200, self.core.resume_background_tasks)
         
         if SPEECH_INSTALLED:
@@ -784,6 +1490,7 @@ class ChatWindow(QMainWindow):
             self.menu.setStyleSheet(menu_stylesheet())
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(page_title_css(19))
+            self.refresh_chat_title()
         if hasattr(self, "subtitle"):
             self.subtitle.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 12px; font-weight: 700;")
         if hasattr(self, "header_line"):
@@ -810,6 +1517,8 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "action_btn"):
             self.refresh_themed_icons()
             self.update_action_btn_visuals()
+        if getattr(self, "history_page", None) is not None:
+            self.history_page.apply_theme()
         if refresh_messages:
             for container in self.findChildren(ChatMessageContainer):
                 container.apply_theme()
@@ -831,7 +1540,7 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(0, apply_batch)
 
     def invalidate_themed_pages(self):
-        for attr in ("tools_page", "usage_page", "task_center_page", "trace_page", "about_page"):
+        for attr in ("tools_page", "usage_page", "task_center_page", "trace_page", "history_page", "about_page"):
             page = getattr(self, attr, None)
             if page is not None:
                 self.stacked_widget.removeWidget(page)
@@ -863,17 +1572,18 @@ class ChatWindow(QMainWindow):
         
         self.menu = QMenu(self)
         self.menu.setStyleSheet(menu_stylesheet())
+        self.menu.addAction("שיחה חדשה").triggered.connect(self.start_new_chat)
+        self.menu.addAction("היסטוריית שיחות").triggered.connect(self.show_history_page)
         self.menu.addAction("כלים").triggered.connect(self.show_tools_page)
         self.menu.addAction("הגדרות").triggered.connect(self.show_settings_page)
         self.menu.addAction("מרכז משימות").triggered.connect(self.show_task_center_page)
         self.menu.addAction("נתוני שימוש").triggered.connect(self.show_usage_page)
-        self.menu.addAction("נקה צ'אט").triggered.connect(self.clear_chat)
         self.menu.addAction("אודות").triggered.connect(self.show_about_page)
         self.menu_btn.clicked.connect(self.show_menu)
         
         titles_layout = QVBoxLayout()
         titles_layout.setSpacing(0)
-        self.title_label = QLabel("Smarti AI")
+        self.title_label = QLabel(self.active_chat_title())
         self.title_label.setStyleSheet(page_title_css(19))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
@@ -1038,6 +1748,14 @@ class ChatWindow(QMainWindow):
         self.trace_page.load_trace()
         self.stacked_widget.setCurrentWidget(self.trace_page)
         self._reset_page_scrolls(self.trace_page)
+
+    def show_history_page(self):
+        if self.history_page is None:
+            self.history_page = ChatHistoryPage(self.core, self)
+            self.stacked_widget.addWidget(self.history_page)
+        self.history_page.load_sessions()
+        self.stacked_widget.setCurrentWidget(self.history_page)
+        self._reset_page_scrolls(self.history_page)
 
     def show_about_page(self):
         if self.about_page is None:
@@ -1340,30 +2058,59 @@ class ChatWindow(QMainWindow):
                 
         self.current_agent_bubble = None
         self.current_agent_container = None
+        if self.history_page is not None:
+            self.history_page.load_sessions()
+        self.refresh_chat_title()
         QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
-    def clear_chat(self):
+    def _clear_chat_widgets(self):
         self.core.stop_speaking()
         self.tts_active = False
         self.active_tts_container = None
-        for i in reversed(range(self.chat_layout.count())): 
-            item = self.chat_layout.itemAt(i)
-            if item.widget(): item.widget().deleteLater()
-            elif item.layout():
-                for j in reversed(range(item.layout().count())):
-                    w = item.layout().itemAt(j).widget()
-                    if w: w.deleteLater()
-                item.layout().deleteLater()
-        if hasattr(self.core, 'gemini_history'): self.core.gemini_history = []
-        if hasattr(self.core, 'universal_history'): self.core.universal_history = [{"role": "system", "content": self.core.system_prompt}]
-        self.core.recent_tool_observations = []
-        self.core.tool_observations = []
-        self.core.settings["tool_context_transcript"] = []
-        self.core.settings["conversation_summary"] = ""
-        self.core._save_settings()
-        self.core.system_prompt = self.core._load_system_prompt()
-        logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (ניקוי צ'אט) ---\n{'='*50}")
-        self.add_message("שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊", is_user=False, show_actions=False)
+        while self.chat_layout.count():
+            item = self.chat_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            layout = item.layout()
+            if layout:
+                while layout.count():
+                    child = layout.takeAt(0)
+                    child_widget = child.widget()
+                    if child_widget:
+                        child_widget.deleteLater()
+                layout.deleteLater()
+
+    def load_active_chat_session(self):
+        self._clear_chat_widgets()
+        messages = self.core.active_chat_messages()
+        if not messages:
+            self.add_message(WELCOME_MESSAGE, is_user=False, show_actions=False)
+            self.refresh_chat_title()
+            return
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content", "") or "")
+            if role not in {"user", "assistant"} or not content.strip():
+                continue
+            self.add_message(content, is_user=(role == "user"), show_actions=True)
+        self.refresh_chat_title()
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+
+    def start_new_chat(self):
+        if self.agent_running:
+            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להתחיל שיחה חדשה בזמן שסמארטי עדיין עובד.")
+            return
+        self.core.start_new_chat_session()
+        logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה ---\n{'='*50}")
+        self.load_active_chat_session()
+        self.stacked_widget.setCurrentWidget(self.chat_page)
+        self.refresh_chat_title()
+        if self.history_page is not None:
+            self.history_page.load_sessions()
+
+    def clear_chat(self):
+        self.start_new_chat()
 
 class AnimatedSplash(QWidget):
     def __init__(self, anim_path, fallback_path, size, border_color, border_width, radius, bg_color):

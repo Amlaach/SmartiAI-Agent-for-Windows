@@ -923,7 +923,7 @@ DEFAULT_SETTINGS = {
     "mcp_package_aliases": {},
     "enable_final_verifier": True,
     "max_concurrent_agents": 1,
-    "allow_insecure_ssl_compat": False,
+    "allow_insecure_ssl_compat": True,
     "command_timeout_seconds": 60,
     "tool_timeout_seconds": 120,
     "mcp_timeout_seconds": 60,

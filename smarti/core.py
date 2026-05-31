@@ -2,6 +2,7 @@
 from .common import *
 from .config import *
 from .managers import *
+from .history import ChatSessionStore, DEFAULT_CHAT_TITLE
 
 # ==========================================
 # ליבת המערכת - SmartiCore
@@ -15,6 +16,7 @@ class SmartiCore:
             (LEGACY_USAGE_FILE, USAGE_FILE),
             (LEGACY_MEMORY_FILE, MEMORY_FILE),
             (LEGACY_MEMORY_EXPORT_FILE, MEMORY_EXPORT_FILE),
+            (LEGACY_CHAT_HISTORY_FILE, CHAT_HISTORY_FILE),
             (LEGACY_MCP_CONFIG_FILE, MCP_CONFIG_FILE),
         ]
         for legacy_path, target_path in file_pairs:
@@ -44,6 +46,8 @@ class SmartiCore:
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
         _CURRENT_SETTINGS_REF["settings"] = self.settings
+        self.chat_store = ChatSessionStore(CHAT_HISTORY_FILE)
+        self.chat_store.ensure_active_session()
         self._sync_ssl_compat_env()
         if self._normalize_autonomy_profile_settings():
             self._save_settings()
@@ -75,6 +79,7 @@ class SmartiCore:
         self.ui_state = UiState(self)
         self.system_prompt = self._load_system_prompt()
         self.setup_model()
+        self._restore_active_chat_context()
         self.status_callback = None
         self.print_callback = None
         self.ask_user_callback = None 
@@ -2638,7 +2643,7 @@ class SmartiCore:
         return allowed or [APP_DIR]
 
     def _allow_insecure_ssl(self):
-        return bool(self.settings.get("allow_insecure_ssl_compat", False))
+        return bool(self.settings.get("allow_insecure_ssl_compat", True))
 
     def _add_ssl_sitecustomize_path(self, env):
         existing = env.get("PYTHONPATH", "")
@@ -4130,6 +4135,188 @@ class SmartiCore:
         elif self.mode == "anthropic":
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
 
+    def _messages_to_provider_history(self, messages):
+        messages = messages or []
+        if self.mode == "gemini":
+            history = []
+            for message in messages:
+                role = message.get("role")
+                content = str(message.get("content", "") or "")
+                if not content.strip():
+                    continue
+                if role == "user":
+                    history.append({"role": "user", "content": content})
+                elif role == "assistant":
+                    history.append({"role": "model", "content": content})
+            return history
+        history = [{"role": "system", "content": self.system_prompt}]
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content", "") or "")
+            if not content.strip():
+                continue
+            if role == "user":
+                history.append({"role": "user", "content": content})
+            elif role == "assistant":
+                history.append({"role": "assistant", "content": content})
+        return history
+
+    def _chat_context_snapshot(self):
+        return {
+            "mode": getattr(self, "mode", ""),
+            "system_prompt": getattr(self, "system_prompt", ""),
+            "gemini_history": copy.deepcopy(getattr(self, "gemini_history", [])),
+            "universal_history": copy.deepcopy(getattr(self, "universal_history", [])),
+            "conversation_summary": self.settings.get("conversation_summary", ""),
+            "tool_context_transcript": copy.deepcopy(self.settings.get("tool_context_transcript", [])),
+            "recent_tool_observations": copy.deepcopy(getattr(self, "recent_tool_observations", [])),
+            "tool_observations": copy.deepcopy(getattr(self, "tool_observations", [])),
+        }
+
+    def _restore_active_chat_context(self):
+        store = getattr(self, "chat_store", None)
+        if not store:
+            return
+        session = store.active_session()
+        context = session.get("context", {}) if isinstance(session, dict) else {}
+        self.settings["conversation_summary"] = str(context.get("conversation_summary", "") or "")
+        transcript = context.get("tool_context_transcript", [])
+        self.settings["tool_context_transcript"] = copy.deepcopy(transcript if isinstance(transcript, list) else [])
+        self.recent_tool_observations = copy.deepcopy(context.get("recent_tool_observations", []) if isinstance(context.get("recent_tool_observations", []), list) else [])
+        self.tool_observations = copy.deepcopy(context.get("tool_observations", []) if isinstance(context.get("tool_observations", []), list) else [])
+        self.system_prompt = self._load_system_prompt()
+
+        saved_mode = normalize_provider_name(context.get("mode", ""))
+        if self.mode == "gemini":
+            history = context.get("gemini_history") if saved_mode == "gemini" else None
+            self.gemini_history = copy.deepcopy(history if isinstance(history, list) else self._messages_to_provider_history(session.get("messages", [])))
+        else:
+            history = context.get("universal_history") if saved_mode != "gemini" else None
+            if not isinstance(history, list) or not history:
+                history = self._messages_to_provider_history(session.get("messages", []))
+            history = [copy.deepcopy(message) for message in history if isinstance(message, dict)]
+            history = [message for message in history if message.get("role") != "system"]
+            history.insert(0, {"role": "system", "content": self.system_prompt})
+            self.universal_history = history
+        try:
+            self._save_settings()
+            store.update_context(self._chat_context_snapshot(), session.get("id"))
+        except Exception as e:
+            logging.warning(f"Active chat context restore save failed: {e}")
+
+    def reset_current_conversation_context(self, save=True):
+        if getattr(self, "mode", "") == "gemini":
+            self.gemini_history = []
+        else:
+            self.universal_history = [{"role": "system", "content": getattr(self, "system_prompt", "")}]
+        self.recent_tool_observations = []
+        self.tool_observations = []
+        self.settings["tool_context_transcript"] = []
+        self.settings["conversation_summary"] = ""
+        self.system_prompt = self._load_system_prompt()
+        if getattr(self, "mode", "") != "gemini":
+            self.universal_history = [{"role": "system", "content": self.system_prompt}]
+        if save:
+            self._save_settings()
+
+    def start_new_chat_session(self):
+        session = self.chat_store.create_session(set_active=True)
+        self.reset_current_conversation_context(save=True)
+        self.chat_store.update_context(self._chat_context_snapshot(), session.get("id"))
+        return session
+
+    def activate_chat_session(self, session_id):
+        if not self.chat_store.set_active(session_id):
+            return False
+        self._restore_active_chat_context()
+        return True
+
+    def active_chat_session(self):
+        return self.chat_store.active_session()
+
+    def active_chat_messages(self):
+        return self.chat_store.messages()
+
+    def list_chat_sessions(self, query=""):
+        return self.chat_store.list_sessions(query)
+
+    def rename_chat_session(self, session_id, title):
+        return self.chat_store.rename_session(session_id, title)
+
+    def set_chat_session_pinned(self, session_id, pinned):
+        return self.chat_store.set_pinned(session_id, pinned)
+
+    def delete_chat_session(self, session_id):
+        deleted = self.chat_store.delete_session(session_id)
+        if deleted:
+            self._restore_active_chat_context()
+        return deleted
+
+    def export_chat_session(self, session_id, target_path):
+        return self.chat_store.export_session(session_id, target_path)
+
+    def _fallback_conversation_title(self, user_text):
+        words = re.sub(r"\s+", " ", str(user_text or "")).strip()
+        return words[:48].rstrip(" .,:;!?") or DEFAULT_CHAT_TITLE
+
+    def generate_conversation_title(self, user_text, assistant_text):
+        prompt = (
+            "Create a short natural Hebrew title for this chat. "
+            "Return only the title, no quotes, no punctuation decoration, up to 7 words.\n\n"
+            f"User:\n{str(user_text or '')[:1400]}\n\nAssistant:\n{str(assistant_text or '')[:1400]}"
+        )
+        current_model = self.settings.get(f"selected_{self.mode}_model") or provider_default_model(self.mode) or "Local"
+        previous_prompt = getattr(self, "system_prompt", "")
+        previous_status = self.status_callback
+        try:
+            self.status_callback = None
+            self.system_prompt = "You name chat conversations. Return one concise Hebrew title only."
+            if self.mode == "gemini":
+                messages = [{"role": "user", "parts": [{"text": prompt}]}]
+            else:
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": prompt},
+                ]
+            title, usage = self._handle_api_request_with_retry(current_model, messages, retry_wait_times=[])
+            if usage:
+                self._log_usage(current_model, usage)
+            title = re.sub(r"[\r\n]+", " ", str(title or "")).strip()
+            title = re.sub(r'^[#"\':\-–—\s]+|[#"\':\-–—\s]+$', "", title).strip()
+            title = re.sub(r"\s+", " ", title)
+            return title[:64].rstrip() or self._fallback_conversation_title(user_text)
+        except Exception as e:
+            logging.warning(f"Conversation title generation failed: {e}")
+            return self._fallback_conversation_title(user_text)
+        finally:
+            self.system_prompt = previous_prompt
+            self.status_callback = previous_status
+
+    def _display_assistant_text_for_history(self, response):
+        text = str(response or "")
+        if text.startswith("ERROR_USER:"):
+            return f"שגיאה: {text.replace('ERROR_USER:', '').strip()}"
+        return text
+
+    def _record_active_chat_turn(self, user_text, final_response):
+        if not getattr(self, "chat_store", None):
+            return
+        should_title = (
+            self.chat_store.should_generate_title_for_next_turn()
+            and str(final_response or "").strip()
+            and not str(final_response or "").startswith("ERROR_USER:")
+        )
+        title = self.generate_conversation_title(user_text, final_response) if should_title else ""
+        assistant_text = self._display_assistant_text_for_history(final_response)
+        self.chat_store.add_turn(
+            user_text,
+            assistant_text,
+            assistant_raw=final_response,
+            is_error=str(final_response or "").startswith("ERROR_USER:"),
+            title=title,
+            context=self._chat_context_snapshot(),
+        )
+
     def _load_settings(self):
         if not os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, 'w', encoding='utf-8') as f: json.dump(DEFAULT_SETTINGS, f, ensure_ascii=False, indent=4)
@@ -4784,9 +4971,9 @@ CWD: {current_dir}
         )
         return prompt + "\n" + safety_policy
 
-    def _handle_api_request_with_retry(self, current_model, current_messages):
+    def _handle_api_request_with_retry(self, current_model, current_messages, retry_wait_times=None):
         retries = 0
-        wait_times = [15, 30, 30]
+        wait_times = [15, 30, 30] if retry_wait_times is None else list(retry_wait_times)
         max_retries = len(wait_times)
         while retries <= max_retries:
             try:
@@ -4953,6 +5140,7 @@ CWD: {current_dir}
         run_cancel_event = cancel_event if cancel_event is not None else threading.Event()
         iteration = 0
         final_response = ""
+        chat_turn_recorded = False
         current_model = ""
         task_state = None
         try:
@@ -5269,6 +5457,12 @@ CWD: {current_dir}
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
             return final_response
         finally:
+            if not is_background_task and final_response and not chat_turn_recorded:
+                try:
+                    self._record_active_chat_turn(user_text, final_response)
+                    chat_turn_recorded = True
+                except Exception as e:
+                    logging.warning(f"Chat turn persistence failed: {e}")
             if self.status_callback:
                 self.status_callback("")
             if getattr(self, "agent_runtime", None):
