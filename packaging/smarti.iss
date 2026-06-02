@@ -1,4 +1,4 @@
-#define MyAppName "SmartiAI Agent for Windows"
+#define MyAppName "SmartiAI"
 #define MyAppPublisher "SmartiAI"
 #define MyAppExeName "SmartiAI.exe"
 
@@ -45,6 +45,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "DisplayName"; ValueData: "SmartiAI"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\assets\smarti.ico"; Flags: uninsdeletekey
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"

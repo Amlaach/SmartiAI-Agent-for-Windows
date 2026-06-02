@@ -35,6 +35,8 @@ for package in (
     "selenium",
     "speech_recognition",
     "uiautomation",
+    "windows_toasts",
+    "winrt",
 ):
     try:
         hiddenimports += collect_submodules(package)

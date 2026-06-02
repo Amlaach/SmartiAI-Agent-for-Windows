@@ -49,6 +49,7 @@ BUILTIN_TOOL_DISPLAY_LABELS = {
     "web_manager": "אינטרנט ואתרים",
     "screen_manager": "צילום וניתוח מסך",
     "background_task_manager": "משימות רקע",
+    "notification_manager": "התראות ותזכורות",
     "memory_manager": "ניהול זיכרון",
     "email_manager": "ניהול דוא\"ל",
     "automation_manager": "אוטומציה בדפדפן ובמחשב",

@@ -4,16 +4,20 @@ from .ui_styles import *
 from .core import SmartiCore
 from .chat import ChatWindow, AnimatedSplash
 from .legal import LegalAgreementDialog, raw_settings_have_current_legal_acceptance, record_legal_acceptance
+from .windows_notifications import ensure_windows_notification_identity
 
 
 def main():
     try:
-        myappid = 'amd.smarti.ai.agent.085'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        ensure_windows_notification_identity()
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(SMARTI_APP_AUMID)
     except Exception:
         pass
 
     app = QApplication(sys.argv)
+    app.setApplicationName(SMARTI_APP_DISPLAY_NAME)
+    app.setApplicationDisplayName(SMARTI_APP_DISPLAY_NAME)
+    app.setOrganizationName(SMARTI_APP_DISPLAY_NAME)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
     app.setCursorFlashTime(1000)
     app.setFont(QFont("Segoe UI", 10))

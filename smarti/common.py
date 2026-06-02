@@ -237,6 +237,8 @@ os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 WIN_CREATE_NO_WINDOW = 0x08000000
 SMARTI_BROWSER_DEBUG_PORT = 49223
 SMARTI_BROWSER_PROFILE_NAME = "SmartiChromeProfile"
+SMARTI_APP_DISPLAY_NAME = "SmartiAI"
+SMARTI_APP_AUMID = "SmartiAI"
 
 class SmartiCancelled(Exception):
     pass

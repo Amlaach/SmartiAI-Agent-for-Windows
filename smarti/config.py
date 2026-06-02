@@ -630,6 +630,33 @@ BUILTIN_TOOL_SCHEMAS["background_task_manager"] = {
     }
 }
 
+BUILTIN_TOOL_SCHEMAS["notification_manager"] = {
+    "description": "Unified Windows notifications, reminders, calendar-event, and Windows Calendar/Clock opening tool. Use for attention-grabbing reminders and user-visible Windows toasts; chat messages should still be sent normally.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["send_toast", "schedule_reminder", "list_reminders", "cancel_reminder", "create_calendar_event", "open_windows_app"], "description": "Notification/reminder/calendar operation."},
+            "title": {"type": "string", "description": "Notification, reminder, or calendar event title."},
+            "body": {"type": "string", "description": "Notification body."},
+            "message": {"type": "string", "description": "Reminder or notification message."},
+            "kind": {"type": "string", "enum": ["default", "reminder", "alarm", "important"], "description": "Windows toast tone/audio scenario."},
+            "open_button": {"type": "boolean", "description": "Whether to include an Open Smarti button."},
+            "delay_minutes": {"type": "number", "description": "Minutes until a scheduled reminder appears."},
+            "repeat": {"type": "string", "enum": ["once", "interval"], "description": "Reminder repeat mode."},
+            "interval_minutes": {"type": "number", "description": "Minutes between repeated reminders when repeat=interval."},
+            "id": {"type": "string", "description": "Reminder/background task id for cancellation."},
+            "target": {"type": "string", "enum": ["calendar", "clock", "alarms", "notification_settings", "focus_settings"], "description": "Windows app/settings target for open_windows_app."},
+            "start": {"type": "string", "description": "Calendar event start time in ISO local format, e.g. 2026-06-03T15:30:00."},
+            "end": {"type": "string", "description": "Calendar event end time in ISO local format."},
+            "duration_minutes": {"type": "number", "description": "Calendar event duration if end is omitted."},
+            "location": {"type": "string", "description": "Calendar event location."},
+            "notes": {"type": "string", "description": "Calendar event notes/description."},
+            "open": {"type": "boolean", "description": "Open the generated .ics calendar event file after creation."}
+        },
+        "required": ["action"]
+    }
+}
+
 BUILTIN_TOOL_SCHEMAS["memory_manager"] = {
     "description": "Unified memory tool for search and update. Use only for durable or task-continuity memory.",
     "inputSchema": {
@@ -712,6 +739,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "web_manager": "Unified web: search, read, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
+    "notification_manager": "Unified Windows toasts, reminders, calendar events, Calendar/Clock/settings opening.",
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
     "automation_manager": "Unified browser/computer automation."
@@ -737,6 +765,7 @@ PUBLIC_BUILTIN_TOOLS = [
     "web_manager",
     "screen_manager",
     "background_task_manager",
+    "notification_manager",
     "memory_manager",
     "email_manager",
     "automation_manager",
@@ -768,6 +797,7 @@ TOOL_CATEGORIES = {
     "web_manager": "web",
     "screen_manager": "screen",
     "background_task_manager": "tasks",
+    "notification_manager": "tasks",
     "memory_manager": "memory",
     "email_manager": "email",
     "automation_manager": "automation",

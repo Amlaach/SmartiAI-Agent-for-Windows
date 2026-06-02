@@ -68,6 +68,7 @@ class SmartiCore:
         self.ask_user_callback = None 
         self.api_key_callback = None
         self.step_callback = None
+        self.notification_callback = None
         self.tts_status_callback = None
         self.tts_lock = threading.Lock()
         self._stop_speech_flag = False
@@ -87,6 +88,17 @@ class SmartiCore:
         if ask_user_cb: self.ask_user_callback = ask_user_cb
         if step_cb: self.step_callback = step_cb
         if api_key_cb: self.api_key_callback = api_key_cb
+
+    def _emit_notification(self, kind, payload=None):
+        callback = getattr(self, "notification_callback", None)
+        if not callback:
+            return False
+        try:
+            callback(kind, payload or {})
+            return True
+        except Exception:
+            logging.exception("Notification callback failed.")
+            return False
 
     def _ensure_tools_dir(self):
         if not os.path.exists(TOOLS_DIR): os.makedirs(TOOLS_DIR)
@@ -615,6 +627,7 @@ class SmartiCore:
             "web_manager": "network",
             "screen_manager": "screenshot",
             "background_task_manager": "background_task",
+            "notification_manager": "background_task",
             "memory_manager": "file_write",
             "extension_manager": "mcp_run",
             "automation_manager": "computer_control"
@@ -1305,6 +1318,27 @@ class SmartiCore:
                 else:
                     args["action"] = "list"
             return {k: v for k, v in args.items() if k in {"action", "delay_minutes", "prompt", "repeat", "interval_minutes", "id"}}
+
+        if action == "notification_manager":
+            if "action" not in args:
+                if "delay_minutes" in args:
+                    args["action"] = "schedule_reminder"
+                elif "start" in args or "start_time" in args:
+                    args["action"] = "create_calendar_event"
+                elif "target" in args:
+                    args["action"] = "open_windows_app"
+                else:
+                    args["action"] = "send_toast"
+            if "message" not in args and "prompt" in args:
+                args["message"] = args.get("prompt")
+            if "body" not in args and "message" in args and args.get("action") == "send_toast":
+                args["body"] = args.get("message")
+            return {k: v for k, v in args.items() if k in {
+                "action", "title", "body", "message", "kind", "open_button",
+                "delay_minutes", "repeat", "interval_minutes", "id", "target",
+                "start", "start_time", "end", "end_time", "duration_minutes",
+                "location", "notes", "description", "open"
+            }}
 
         if action == "memory_manager":
             if "action" not in args:
@@ -2997,6 +3031,17 @@ class SmartiCore:
             if manager_op == "retry":
                 return "מריץ משימה מחדש"
             return "מפעיל משימת רקע"
+        if action == "notification_manager":
+            manager_op = str(args.get("action") or "").strip()
+            if manager_op == "schedule_reminder":
+                return "מתזמן תזכורת"
+            if manager_op == "send_toast":
+                return "שולח התראה"
+            if manager_op == "create_calendar_event":
+                return "יוצר אירוע ליומן"
+            if manager_op == "open_windows_app":
+                return "פותח כלי זמן של Windows"
+            return "מנהל התראות ותזכורות"
         if action == "memory_manager":
             return "מחפש בזיכרון" if str(args.get("action") or "") == "search" else "מעדכן זיכרון"
         if action == "automation_manager":
@@ -3129,7 +3174,12 @@ class SmartiCore:
                 current["started_at"] = datetime.now().isoformat(timespec="seconds")
                 self._save_settings()
                 self._execution_context.policy_snapshot = current.get("policy_snapshot", {})
-                res = self.send_message(f"[משימת רקע שקטה]: {current.get('prompt', '')}", is_background_task=True, cancel_event=cancel_event)
+                if current.get("kind") == "reminder":
+                    title = str(current.get("title") or "תזכורת מסמארטי").strip()
+                    message = str(current.get("message") or current.get("prompt") or "").strip()
+                    res = f"{title}\n\n{message}".strip()
+                else:
+                    res = self.send_message(f"[משימת רקע שקטה]: {current.get('prompt', '')}", is_background_task=True, cancel_event=cancel_event)
                 current = self._get_background_task(task_id) or current
                 if int(current.get("generation", 0) or 0) != generation:
                     return
@@ -3153,6 +3203,8 @@ class SmartiCore:
                 if res and "ERROR" not in res and self.print_callback:
                     self.print_callback(res, False)
                     if self.settings.get("read_aloud_all"): self.speak_text(res)
+                if res and "ERROR" not in res:
+                    self._emit_notification("background_task_finished", {"task": dict(current), "result": res})
             except Exception as e:
                 logging.exception("Background task crashed unexpectedly.")
                 self._recover_after_agent_crash()
@@ -4829,6 +4881,7 @@ class SmartiCore:
             "web_manager",
             "screen_manager",
             "background_task_manager",
+            "notification_manager",
             "memory_manager",
             "automation_manager",
             "extension_manager",
@@ -4942,6 +4995,7 @@ CWD: {current_dir}
 3. בחירת כלי היא שיקול דעת שלך: העדף תשובה ישירה כשאין צורך בפעולה; אחרת העדף כלי מובנה/manager מתאים; השתמש ב-Skill כשיש מתודולוגיה רב-שלבית מתאימה; השתמש בכלי Python קיים רק כשנדרש עיבוד מקומי ייעודי; השתמש ב-MCP קיים כשנדרש API/שירות חיצוני; חיפוש/התקנת Skill או MCP רק כשאין יכולת קיימת מתאימה; יצירת כלי Python רק ליכולת מקומית כללית, פרמטרית ורב-פעמית. מותר לחרוג כאשר פרטי המשימה או בקשת המשתמש מצדיקים זאת.
 3א. לפני shell חופשי שאל את עצמך אם יש כלי מובנה טוב יותר: `run_project_check` לבדיקות/build מוכרות, `git_status` ל-git קריאה בלבד, `file_manager` לשמירה/פתיחה/חיפוש, `software_manager` לפתיחת אפליקציות, `web_manager` לרשת ומזג אוויר. אם בחרת shell בכל זאת, ודא שזה בגלל צורך אמיתי ולא קיצור דרך.
 3ב. נאמנות לדרך שביקש המשתמש: אם המשתמש ביקש במפורש לבצע פעולה באפליקציה, בתוך חלון, באמצעות כלי מסוים, או השתמש במילים כמו "דווקא", "בתוך", "באמצעות" או "פתח", זו דרישת ביצוע ולא רק רמז. נסה קודם את הדרך המבוקשת. אם היא נכשלת, בצע אבחון וניסיון בטוח נוסף בדרך קרובה לפני מעבר לחלופה. מעבר לחלופה מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז אמור זאת למשתמש בקצרה ואל תטען שבוצעה הדרך המקורית.
+3ג. לתזכורות, התראות Windows, פתיחת Calendar/Clock, יצירת אירוע יומן או התראה שמושכת תשומת לב, העדף `notification_manager`. לתזכורת פשוטה השתמש `notification_manager` עם `action:"schedule_reminder"` כדי לקבל גם הודעת צ'אט וגם Windows toast בזמן הנכון, בלי להריץ מודל רק כדי להזכיר.
 4. הורדת כלי חדש: לפני התקנת MCP חפש ובדוק חבילה, מפרסם, תיאור וגרסה נעולה; לפני התקנת Skill חפש ובדוק התאמה. אם המשתמש נתן מזהה מדויק וביקש התקנה ישירה, עדיין שקול בקצרה אם חיפוש מקדים נחוץ לבטיחות. צור כלי Python חדש רק עם JSON Schema מלא וקלט דרך sys.argv[1], ללא קוד קשיח למקרה חד-פעמי אלא אם המשתמש ביקש זאת במפורש.
 5. למזג אוויר ותחזית השתמש קודם ב-`get_weather` עם שם מיקום כללי ואל תמציא נתונים. Skill בשם weather הוא מדריך בלבד אלא אם הוא הותקן עם handler מפורש.
 5א. אם המשתמש ביקש במפורש MCP/שרת חיצוני עבור מזג אוויר, העדף MCP מותקן ומאושר על פני `get_weather`. אם MCP נכשל או חסום, אמור זאת ואל תטען שהשתמשת בו.
@@ -4981,7 +5035,7 @@ CWD: {current_dir}
         safety_policy = "**בטיחות:** אין פעולות הרסניות, עקיפת הרשאות, גניבת מידע, הסתרת פעילות או קוד לא מאומת. לפעולות קבצים/מסך/אימייל/MCP/shell/שליטה במחשב השתמש במנגנון האישור התוכנתי של היישום כאשר הוא נדרש, ואל תבקש אישור ידני בתוך הצ'אט במקום להפעיל כלי."
         prompt += (
             "\n\n**Unified tool routing:** Prefer the visible manager tools (`system_manager`, `software_manager`, "
-            "`file_manager`, `web_manager`, `screen_manager`, `background_task_manager`, `memory_manager`, "
+            "`file_manager`, `web_manager`, `screen_manager`, `background_task_manager`, `notification_manager`, `memory_manager`, "
             "`automation_manager`, `extension_manager`). Legacy tool names are compatibility aliases only. "
             "Before calling a manager tool, choose an `action` from its enum and include only documented fields.\n"
             "\n\n**Hidden full tool-call context for this conversation:**\n"
@@ -7255,6 +7309,7 @@ else:
             elif action == "list_background_tasks": return (self.list_background_tasks(), None)
             elif action == "cancel_background_task": return (self.cancel_background_task(str(args_dict.get("id", ""))), None)
             elif action == "retry_background_task": return (self.retry_background_task(str(args_dict.get("id", "")), args_dict.get("delay_minutes", 0)), None)
+            elif action == "notification_manager": return (self.notification_manager(args_dict), None)
             elif action == "open_software":
                 allowed, err = self._ensure_capability_allowed("software_open", "אישור פתיחת תוכנה", str(args_dict.get("name", "")), risk="low")
                 if not allowed: return (err, None)
@@ -9385,6 +9440,186 @@ if __name__ == "__main__":
             return f"SUCCESS: משימה תוכננה. מזהה: {task['id']}"
         except Exception as e: return f"ERROR: {e}"
 
+    def schedule_reminder(self, delay_minutes, message, title="", repeat="once", interval_minutes=""):
+        try:
+            delay = float(delay_minutes or 0)
+            if delay < 0:
+                return "ERROR: Delay must be positive."
+            repeat = str(repeat or "once").strip().lower()
+            if repeat not in {"once", "interval"}:
+                repeat = "once"
+            interval = float(interval_minutes) if str(interval_minutes or "").strip() else delay
+            if repeat == "interval" and interval < 1:
+                return "ERROR: Interval must be at least 1 minute."
+            title = str(title or "תזכורת מסמארטי").strip()
+            message = str(message or "").strip()
+            if not message:
+                return "ERROR: Missing reminder message."
+            task = {
+                "id": str(uuid.uuid4())[:8],
+                "kind": "reminder",
+                "title": title,
+                "message": message,
+                "prompt": message,
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "run_at": (datetime.now() + timedelta(minutes=delay)).isoformat(timespec="seconds"),
+                "repeat": repeat,
+                "interval_minutes": interval if repeat == "interval" else None,
+                "policy_snapshot": self.background_scheduler.policy_snapshot() if getattr(self, "background_scheduler", None) else self._normalize_policy_matrix(),
+                "history": [],
+                "status": "scheduled",
+                "generation": 0
+            }
+            self.settings.setdefault("background_tasks", []).append(task)
+            self.settings["background_jobs"] = self.settings["background_tasks"]
+            self._save_settings()
+            self._schedule_background_task_thread(task)
+            return f"SUCCESS: תזכורת תוכננה. מזהה: {task['id']}"
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    def list_reminders(self):
+        tasks = [
+            task for task in self.settings.get("background_tasks", [])
+            if task.get("kind") == "reminder" and task.get("status") in {"scheduled", "running", "cancelling"}
+        ]
+        if not tasks:
+            return "אין תזכורות פעילות."
+        lines = ["תזכורות פעילות:"]
+        for task in tasks[-30:]:
+            repeat = "מחזורית" if task.get("repeat") == "interval" else "חד-פעמית"
+            lines.append(f"- {task.get('id')} | {task.get('status')} | {repeat} | זמן: {task.get('run_at')} | {task.get('title', '')}: {task.get('message', '')[:140]}")
+        return "\n".join(lines)
+
+    def _open_windows_uri(self, *uris):
+        if platform.system() != "Windows":
+            return "ERROR: פתיחת אפליקציות Windows זמינה רק ב-Windows."
+        last_error = ""
+        for uri in uris:
+            if not uri:
+                continue
+            try:
+                os.startfile(str(uri))
+                return f"SUCCESS: נפתח {uri}"
+            except Exception as e:
+                last_error = str(e)
+        return f"ERROR: לא ניתן לפתוח את היעד. {last_error}"
+
+    def _ics_escape(self, value):
+        text = str(value or "")
+        return text.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+
+    def _parse_event_datetime(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return None
+        text = text.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+
+    def create_calendar_event_file(self, args):
+        try:
+            title = str(args.get("title") or args.get("summary") or "אירוע מסמארטי").strip()
+            start = self._parse_event_datetime(args.get("start") or args.get("start_time"))
+            if not start:
+                return "ERROR: Missing event start time. Use ISO format like 2026-06-03T15:30:00."
+            end = self._parse_event_datetime(args.get("end") or args.get("end_time"))
+            if not end:
+                duration = float(args.get("duration_minutes") or 30)
+                end = start + timedelta(minutes=max(1, duration))
+            location = str(args.get("location") or "").strip()
+            notes = str(args.get("notes") or args.get("description") or "").strip()
+            uid = f"{uuid.uuid4()}@smartiai"
+            stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            fmt = lambda dt: dt.strftime("%Y%m%dT%H%M%S")
+            ics = "\r\n".join([
+                "BEGIN:VCALENDAR",
+                "VERSION:2.0",
+                "PRODID:-//SmartiAI//Windows Agent//HE",
+                "CALSCALE:GREGORIAN",
+                "METHOD:PUBLISH",
+                "BEGIN:VEVENT",
+                f"UID:{uid}",
+                f"DTSTAMP:{stamp}",
+                f"DTSTART:{fmt(start)}",
+                f"DTEND:{fmt(end)}",
+                f"SUMMARY:{self._ics_escape(title)}",
+                f"DESCRIPTION:{self._ics_escape(notes)}",
+                f"LOCATION:{self._ics_escape(location)}",
+                "END:VEVENT",
+                "END:VCALENDAR",
+                ""
+            ])
+            os.makedirs(OUTPUTS_DIR, exist_ok=True)
+            path = os.path.join(OUTPUTS_DIR, f"{safe_filename(title, 'smartiai_event')}.ics")
+            suffix = 1
+            base, ext = os.path.splitext(path)
+            while os.path.exists(path):
+                suffix += 1
+                path = f"{base}_{suffix}{ext}"
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(ics)
+            if normalize_bool_text(args.get("open", True)):
+                try:
+                    os.startfile(path)
+                except Exception:
+                    pass
+            return f"SUCCESS: נוצר קובץ אירוע ליומן: {path}"
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    def notification_manager(self, args):
+        args = args or {}
+        action = str(args.get("action") or "send_toast").strip().lower()
+        if action in {"send_toast", "notify", "send_notification"}:
+            title = str(args.get("title") or SMARTI_APP_DISPLAY_NAME)
+            body = str(args.get("body") or args.get("message") or "")
+            kind = str(args.get("kind") or "default").strip().lower()
+            if self._emit_notification("toast", {
+                "title": title,
+                "body": body,
+                "kind": kind,
+                "open_button": args.get("open_button", True),
+            }):
+                return "SUCCESS: התראת Windows נשלחה."
+            return "ERROR: ערוץ ההתראות של הממשק אינו זמין כרגע."
+        if action in {"schedule_reminder", "remind"}:
+            allowed, err = self._ensure_capability_allowed(
+                "background_task",
+                "אישור תזמון תזכורת",
+                f"דחייה: {args.get('delay_minutes', 0)} דקות\n\n{args.get('message') or args.get('prompt') or ''}",
+                risk="medium",
+            )
+            if not allowed:
+                return err
+            return self.schedule_reminder(
+                args.get("delay_minutes", 0),
+                args.get("message") or args.get("prompt") or "",
+                args.get("title") or "תזכורת מסמארטי",
+                args.get("repeat", "once"),
+                args.get("interval_minutes", ""),
+            )
+        if action in {"list_reminders", "list"}:
+            return self.list_reminders()
+        if action in {"cancel_reminder", "cancel"}:
+            return self.cancel_background_task(str(args.get("id") or ""))
+        if action in {"create_calendar_event", "calendar_event"}:
+            return self.create_calendar_event_file(args)
+        if action in {"open_windows_app", "open_calendar", "open_clock", "open_alarms", "open_notification_settings", "open_focus_settings"}:
+            target = str(args.get("target") or action.replace("open_", "")).strip().lower()
+            uri_map = {
+                "calendar": ("outlookcal:", "ms-calendar:"),
+                "windows_app": ("ms-clock:",),
+                "clock": ("ms-clock:",),
+                "alarms": ("ms-clock:",),
+                "notification_settings": ("ms-settings:notifications",),
+                "focus_settings": ("ms-settings:quiethours", "ms-settings:quietmomentsscheduled", "ms-settings:notifications"),
+            }
+            return self._open_windows_uri(*uri_map.get(target, (target,)))
+        return "ERROR: Unsupported notification_manager action."
+
     def list_background_tasks(self):
         tasks = [
             task for task in self.settings.get("background_tasks", [])
@@ -9395,8 +9630,10 @@ if __name__ == "__main__":
         lines = ["משימות רקע:"]
         for task in tasks[-30:]:
             repeat = "מחזורית" if task.get("repeat") == "interval" else "חד-פעמית"
+            kind = "תזכורת" if task.get("kind") == "reminder" else "משימה"
+            prompt = task.get("message") if task.get("kind") == "reminder" else task.get("prompt", "")
             result = (task.get("last_result") or "").replace("\n", " ")[:220]
-            lines.append(f"- {task.get('id')} | {task.get('status')} | {repeat} | ריצה: {task.get('run_at')} | {task.get('prompt', '')[:120]} | {result}")
+            lines.append(f"- {task.get('id')} | {kind} | {task.get('status')} | {repeat} | ריצה: {task.get('run_at')} | {str(prompt or '')[:120]} | {result}")
         return "\n".join(lines)
 
     def cancel_background_task(self, task_id):

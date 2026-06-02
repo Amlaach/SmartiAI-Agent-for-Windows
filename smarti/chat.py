@@ -6,6 +6,8 @@ from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
+from .windows_notifications import WindowsNotificationCenter
+from PyQt6.QtCore import QEventLoop
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
@@ -1362,7 +1364,7 @@ class QuickReplyToast(QWidget):
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("Smarti AI")
+        title = QLabel(SMARTI_APP_DISPLAY_NAME)
         title.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 13px; font-weight: 700;")
         title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         close_btn = QPushButton("×")
@@ -1741,6 +1743,7 @@ class ChatHistoryPage(QWidget):
 class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
+    core_notification_signal = pyqtSignal(str, object)
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
@@ -1755,13 +1758,13 @@ class ChatWindow(QMainWindow):
                 return title
         except Exception:
             pass
-        return "Smarti AI"
+        return SMARTI_APP_DISPLAY_NAME
 
     def refresh_chat_title(self):
         title = self.active_chat_title()
         if hasattr(self, "title_label"):
             self.title_label.setText(title)
-        self.setWindowTitle(f"Smarti AI - {title}" if title != "Smarti AI" else "Smarti AI")
+        self.setWindowTitle(f"{SMARTI_APP_DISPLAY_NAME} - {title}" if title != SMARTI_APP_DISPLAY_NAME else SMARTI_APP_DISPLAY_NAME)
 
     def __init__(self, core):
         super().__init__()
@@ -1775,6 +1778,11 @@ class ChatWindow(QMainWindow):
         self.tts_thread = None
         self._tts_workers = []
         self.pending_attachments = []
+        self.notifications = WindowsNotificationCenter(self)
+        self.notifications.reply_requested.connect(self.submit_quick_reply)
+        self.notifications.activate_requested.connect(self.bring_to_front)
+        self.core_notification_signal.connect(self.handle_core_notification)
+        self.core.notification_callback = lambda kind, payload=None: self.core_notification_signal.emit(kind, payload or {})
         
         icon_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(icon_path):
@@ -1788,6 +1796,7 @@ class ChatWindow(QMainWindow):
             self.tray_icon.setIcon(QIcon(dummy_pixmap))
             
         self.tray_icon.messageClicked.connect(self.bring_to_front)
+        self.tray_icon.setToolTip(SMARTI_APP_DISPLAY_NAME)
         self.tray_icon.show()
         # Custom QuickReplyToast fallback is intentionally disabled.
         # self.quick_reply_toast = QuickReplyToast()
@@ -1798,7 +1807,7 @@ class ChatWindow(QMainWindow):
         self.tts_status_signal.connect(self.on_tts_status)
         self.core.tts_status_callback = lambda is_playing: self.tts_status_signal.emit(is_playing)
         
-        self.setWindowTitle("Smarti AI")
+        self.setWindowTitle(SMARTI_APP_DISPLAY_NAME)
         self.setMinimumSize(380, 680)
         available = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else None
         if available:
@@ -2270,15 +2279,34 @@ class ChatWindow(QMainWindow):
     def show_response_notification(self, response):
         tray_preview = self._plain_notification_text(response, 240)
         try:
-            self.tray_icon.showMessage("Smarti AI", tray_preview, QSystemTrayIcon.MessageIcon.Information, 7000)
+            if hasattr(self, "notifications"):
+                self.notifications.show_response(response)
+                return
+            self.tray_icon.showMessage(SMARTI_APP_DISPLAY_NAME, tray_preview, QSystemTrayIcon.MessageIcon.Information, 7000)
         except Exception as e:
             logging.warning(f"Tray notification failed: {e}")
-        # Native quick reply should be implemented with Windows App Notifications
-        # text input/actions:
-        # <input id="replyText" type="text" .../> +
-        # <action content="שלח" arguments="action=reply" hint-inputId="replyText"/>.
-        # The activation handler should read UserInput["replyText"] and pass it to
-        # submit_quick_reply(). The PyQt popup prototype above is disabled.
+
+    def handle_core_notification(self, kind, payload):
+        payload = payload or {}
+        if not hasattr(self, "notifications"):
+            return
+        if kind == "toast":
+            self.notifications.show_notice(
+                payload.get("title") or SMARTI_APP_DISPLAY_NAME,
+                payload.get("body") or payload.get("message") or "",
+                kind=payload.get("kind") or "default",
+                open_button=payload.get("open_button", True),
+            )
+            return
+        if kind == "background_task_finished":
+            task = payload.get("task") or {}
+            result = payload.get("result") or task.get("last_result") or ""
+            is_reminder = task.get("kind") == "reminder"
+            if not is_reminder and not self._should_notify_user():
+                return
+            title = task.get("title") or ("תזכורת מסמארטי" if is_reminder else "משימת רקע הסתיימה")
+            body = result or task.get("message") or task.get("prompt") or "המשימה הסתיימה."
+            self.notifications.show_notice(title, body, kind="reminder" if is_reminder else "default")
 
     def submit_quick_reply(self, text):
         text = str(text or "").strip()
@@ -2565,17 +2593,64 @@ class ChatWindow(QMainWindow):
             QTimer.singleShot(50, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
     def show_confirm_dialog(self, title, text, risk="medium"):
+        decision = None
+        if self._should_notify_user() and hasattr(self, "notifications"):
+            decision = self._request_permission_from_notification(title, text, risk)
+        if decision is not None:
+            self.agent_thread.confirm_result = bool(decision)
+            self.agent_thread.confirm_event.set()
+            return
         dlg = ActionConfirmDialog(title, text, risk, self)
         self.agent_thread.confirm_result = (dlg.exec() == QDialog.DialogCode.Accepted)
         self.agent_thread.confirm_event.set()
 
+    def _request_permission_from_notification(self, title, text, risk="medium"):
+        decision = {"value": "pending"}
+
+        def answered(value):
+            decision["value"] = value
+
+        shown = self.notifications.show_permission_request(title, text, risk, callback=answered)
+        if not shown:
+            return None
+
+        loop = QEventLoop(self)
+        poll = QTimer(self)
+
+        def maybe_finish():
+            if decision["value"] != "pending":
+                loop.quit()
+                return
+            try:
+                if self.core._is_cancel_requested():
+                    decision["value"] = False
+                    loop.quit()
+            except Exception:
+                pass
+
+        poll.timeout.connect(maybe_finish)
+        poll.start(100)
+        loop.exec()
+        poll.stop()
+        poll.deleteLater()
+        return decision["value"]
+
+    def _should_notify_user(self):
+        return (not self.isVisible()) or self.isMinimized() or (not self.isActiveWindow())
+
     def show_api_key_dialog(self, secret_key, provider_label, title, message, help_url):
+        if self._should_notify_user() and hasattr(self, "notifications"):
+            self.notifications.show_notice(
+                title or "נדרשת הגדרת מפתח API",
+                message or f"סמארטי צריך מפתח עבור {provider_label}.",
+                kind="important",
+            )
         dlg = ApiKeyRequiredDialog(secret_key, provider_label, title, message, help_url, self)
         self.agent_thread.api_key_result = dlg.api_key() if dlg.exec() == QDialog.DialogCode.Accepted else ""
         self.agent_thread.api_key_event.set()
 
     def on_agent_finished(self, response):
-        should_notify = not self.isActiveWindow() or self.isMinimized()
+        should_notify = self._should_notify_user()
         self.agent_running = False
         self.action_btn.setEnabled(True)
         self.update_action_btn_visuals()
