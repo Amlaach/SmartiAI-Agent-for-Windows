@@ -3,6 +3,7 @@ from .common import *
 from .ui_styles import *
 from .core import SmartiCore
 from .chat import ChatWindow, AnimatedSplash
+from .legal import LegalAgreementDialog, raw_settings_have_current_legal_acceptance, record_legal_acceptance
 
 
 def main():
@@ -18,6 +19,14 @@ def main():
     app.setFont(QFont("Segoe UI", 10))
     apply_app_theme(app)
 
+    migrate_legacy_runtime_state()
+    accepted_legal_this_run = False
+    if not raw_settings_have_current_legal_acceptance():
+        legal_dialog = LegalAgreementDialog()
+        if legal_dialog.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+        accepted_legal_this_run = True
+
     splash_size, border_width, radius = 220, 4, 5
     gif_path = os.path.join(ASSETS_DIR, "logo.gif")
     if not os.path.exists(gif_path):
@@ -29,6 +38,8 @@ def main():
     app.processEvents()
 
     core = SmartiCore()
+    if accepted_legal_this_run:
+        record_legal_acceptance(core)
     apply_app_theme(app, settings=core.settings)
     window = ChatWindow(core)
     window.show()

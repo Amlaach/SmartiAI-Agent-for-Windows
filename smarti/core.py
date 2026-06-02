@@ -19,37 +19,7 @@ from .api_errors import (
 # ==========================================
 class SmartiCore:
     def _migrate_legacy_runtime_state(self):
-        if os.path.abspath(USER_DATA_DIR) == os.path.abspath(APP_DIR):
-            return
-        file_pairs = [
-            (LEGACY_SETTINGS_FILE, SETTINGS_FILE),
-            (LEGACY_USAGE_FILE, USAGE_FILE),
-            (LEGACY_MEMORY_FILE, MEMORY_FILE),
-            (LEGACY_MEMORY_EXPORT_FILE, MEMORY_EXPORT_FILE),
-            (LEGACY_CHAT_HISTORY_FILE, CHAT_HISTORY_FILE),
-            (LEGACY_MCP_CONFIG_FILE, MCP_CONFIG_FILE),
-        ]
-        for legacy_path, target_path in file_pairs:
-            try:
-                if os.path.exists(legacy_path) and not os.path.exists(target_path):
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    shutil.copy2(legacy_path, target_path)
-                    logging.info(f"Migrated legacy runtime file: {legacy_path} -> {target_path}")
-            except Exception as e:
-                logging.warning(f"Legacy runtime file migration skipped for {legacy_path}: {e}")
-
-        dir_pairs = [
-            (LEGACY_TOOLS_DIR, TOOLS_DIR),
-            (LEGACY_MCP_TOOLS_DIR, MCP_TOOLS_DIR),
-            (LEGACY_SKILLS_DIR, SKILLS_DIR),
-        ]
-        for legacy_path, target_path in dir_pairs:
-            try:
-                if os.path.isdir(legacy_path) and not os.path.exists(target_path):
-                    shutil.copytree(legacy_path, target_path)
-                    logging.info(f"Migrated legacy runtime directory: {legacy_path} -> {target_path}")
-            except Exception as e:
-                logging.warning(f"Legacy runtime directory migration skipped for {legacy_path}: {e}")
+        migrate_legacy_runtime_state()
 
     def __init__(self):
         self._migrate_legacy_runtime_state()

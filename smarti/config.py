@@ -890,6 +890,13 @@ DEFAULT_SETTINGS = {
     },
     "enable_developer_trace": True,
     "audit_log_enabled": True,
+    "legal_acceptance": {
+        "accepted": False,
+        "version": "",
+        "accepted_at": "",
+        "accepted_app_version": "",
+        "document_title": ""
+    },
     "safe_file_open_mode": "block_executables",
     "raw_shell_requires_approval": True,
     "marketplace_install_requires_approval": True,
