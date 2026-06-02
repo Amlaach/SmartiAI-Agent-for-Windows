@@ -2564,8 +2564,8 @@ class ChatWindow(QMainWindow):
                 self.current_agent_container.reveal_with_entry_animation()
             QTimer.singleShot(50, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
-    def show_confirm_dialog(self, title, text):
-        dlg = ActionConfirmDialog(title, text, self)
+    def show_confirm_dialog(self, title, text, risk="medium"):
+        dlg = ActionConfirmDialog(title, text, risk, self)
         self.agent_thread.confirm_result = (dlg.exec() == QDialog.DialogCode.Accepted)
         self.agent_thread.confirm_event.set()
 

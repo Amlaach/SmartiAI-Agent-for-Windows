@@ -7,7 +7,7 @@ from .common import *
 class AgentWorker(QThread):
     finished_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
-    ask_confirm_signal = pyqtSignal(str, str)
+    ask_confirm_signal = pyqtSignal(str, str, str)
     api_key_required_signal = pyqtSignal(str, str, str, str, str)
     step_signal = pyqtSignal(str)
 
@@ -21,10 +21,10 @@ class AgentWorker(QThread):
         self.api_key_event = threading.Event()
         self.api_key_result = ""
 
-    def ask_user_gui(self, title, text):
+    def ask_user_gui(self, title, text, risk="medium"):
         self.confirm_result = False
         self.confirm_event.clear()
-        self.ask_confirm_signal.emit(title, text)
+        self.ask_confirm_signal.emit(title, text, str(risk or "medium"))
         while not self.confirm_event.wait(0.1):
             if self.core._is_cancel_requested():
                 return False

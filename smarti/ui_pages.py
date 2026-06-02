@@ -4,6 +4,7 @@ from .config import *
 from .ui_styles import *
 from .ui_controls import *
 from .workers import FetchModelsWorker, ApiKeyValidationWorker
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 def refresh_back_button_icon(btn):
     btn.setProperty("smartiBackButton", True)
@@ -109,36 +110,270 @@ TOOL_CATEGORY_DISPLAY_LABELS = {
 }
 
 class ActionConfirmDialog(QDialog):
-    def __init__(self, title, details, parent=None):
+    def __init__(self, title, details, risk="medium", parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setMinimumWidth(420)
-        self.setStyleSheet(dialog_stylesheet())
+        self.setModal(True)
+        width, height = self._initial_size(parent)
+        self.setMinimumSize(min(340, width), min(300, height))
+        self.resize(width, height)
+        self.setStyleSheet(self._stylesheet())
+
         layout = QVBoxLayout(self)
-        header = QLabel(title)
-        header.setStyleSheet(section_title_css(17))
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(0)
+
+        card = QFrame()
+        card.setObjectName("ActionConfirmCard")
+        apply_soft_shadow(card, blur=24, y=7, alpha=36)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(8)
+        layout.addWidget(card)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+
+        icon = QLabel("!")
+        icon.setObjectName("ActionConfirmIcon")
+        icon.setFixedSize(34, 34)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        header_text = QVBoxLayout()
+        header_text.setSpacing(3)
+
+        eyebrow = QLabel("בקשת הרשאה")
+        eyebrow.setObjectName("ActionConfirmEyebrow")
+        header_text.addWidget(eyebrow)
+
+        header = QLabel(str(title or "אישור פעולה"))
+        header.setObjectName("ActionConfirmTitle")
         header.setWordWrap(True)
-        layout.addWidget(header)
-        risk = "גבוה" if re.search(r'(?i)(high|סיכון: high|פקודה|shell|mcp|skill|email|צילום|שליטה|כתיבה|הרצה)', details or "") else "בינוני/נמוך"
-        risk_lbl = QLabel(f"רמת סיכון משוערת: {risk}")
-        risk_lbl.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 700;")
-        layout.addWidget(risk_lbl)
+        header_text.addWidget(header)
+
+        risk_text, risk_tone = self._risk_display(risk)
+        risk_lbl = QLabel(risk_text)
+        risk_lbl.setObjectName("ActionConfirmRisk")
+        risk_lbl.setStyleSheet(self._risk_badge_css(risk_tone))
+        header_text.addWidget(risk_lbl, 0, Qt.AlignmentFlag.AlignRight)
+
+        header_row.addLayout(header_text, 1)
+        card_layout.addLayout(header_row)
+
+        details_title = QLabel("פרטי הפעולה")
+        details_title.setObjectName("ActionConfirmSectionTitle")
+        card_layout.addWidget(details_title)
+
         preview = QTextEdit()
+        preview.setObjectName("ActionConfirmDetails")
         preview.setReadOnly(True)
-        preview.setMinimumHeight(220)
+        preview.setMinimumHeight(105)
+        preview.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         preview.setPlainText(str(details or ""))
-        layout.addWidget(preview)
-        hint = QLabel("אשר רק אם הפעולה, היעד וההרשאות תואמים למה שביקשת מסמארטי לבצע.")
+        preview.verticalScrollBar().setStyleSheet(SCROLLBAR_CSS)
+        preview.horizontalScrollBar().setStyleSheet(SCROLLBAR_CSS)
+        card_layout.addWidget(preview, 1)
+
+        hint_frame = QFrame()
+        hint_frame.setObjectName("ActionConfirmHintFrame")
+        hint_layout = QHBoxLayout(hint_frame)
+        hint_layout.setContentsMargins(10, 7, 10, 7)
+        hint_layout.setSpacing(6)
+        hint = QLabel("אשר רק אם הפעולה תואמת למה שביקשת מסמארטי לבצע.")
+        hint.setObjectName("ActionConfirmHint")
         hint.setWordWrap(True)
-        hint.setStyleSheet(muted_label_css(12))
-        layout.addWidget(hint)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No)
-        buttons.button(QDialogButtonBox.StandardButton.Yes).setText("אשר")
-        buttons.button(QDialogButtonBox.StandardButton.No).setText("דחה")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        hint_layout.addWidget(hint)
+        card_layout.addWidget(hint_frame)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 2, 0, 0)
+        actions.setSpacing(8)
+        actions.addStretch()
+
+        self.reject_btn = QPushButton("דחה")
+        self.reject_btn.setObjectName("ActionConfirmRejectButton")
+        self.reject_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.reject_btn.setAutoDefault(False)
+        self.reject_btn.clicked.connect(self.reject)
+        actions.addWidget(self.reject_btn)
+
+        self.accept_btn = QPushButton("אשר")
+        self.accept_btn.setObjectName("ActionConfirmAcceptButton")
+        self.accept_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.accept_btn.setDefault(True)
+        self.accept_btn.setAutoDefault(True)
+        self.accept_btn.clicked.connect(self.accept)
+        actions.addWidget(self.accept_btn)
+
+        card_layout.addLayout(actions)
+        self.accept_btn.setFocus(Qt.FocusReason.OtherFocusReason)
+
+        self._enter_shortcuts = []
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(self.accept)
+            self._enter_shortcuts.append(shortcut)
+
+    def _initial_size(self, parent):
+        width, height = 430, 340
+        if parent is None:
+            return width, height
+        try:
+            parent_size = parent.size()
+            parent_w = int(parent_size.width())
+            parent_h = int(parent_size.height())
+            if parent_w > 0:
+                width = min(width, max(350, int(parent_w * 0.86)))
+            if parent_h > 0:
+                height = min(height, max(310, int(parent_h * 0.78)))
+        except Exception:
+            pass
+        return width, height
+
+    def _risk_display(self, risk):
+        risk = str(risk or "medium").strip().lower()
+        if risk == "high":
+            return "סיכון גבוה", "high"
+        if risk == "low":
+            return "סיכון נמוך", "low"
+        return "סיכון בינוני", "medium"
+
+    def _risk_badge_css(self, tone):
+        if tone == "high":
+            color = DANGER_COLOR
+            bg = "rgba(240,90,110,0.16)"
+            border = "rgba(240,90,110,0.38)"
+        elif tone == "low":
+            color = ACCENT_SECONDARY_COLOR
+            bg = "rgba(90,242,194,0.13)"
+            border = "rgba(90,242,194,0.30)"
+        else:
+            color = ACCENT_WARM_COLOR
+            bg = "rgba(255,184,107,0.15)"
+            border = "rgba(255,184,107,0.34)"
+        return f"""
+            QLabel#ActionConfirmRisk {{
+                color: {color};
+                background: {bg};
+                border: 1px solid {border};
+                border-radius: 12px;
+                padding: 4px 9px;
+                font-size: 11px;
+                font-weight: 800;
+            }}
+        """
+
+    def _stylesheet(self):
+        return dialog_stylesheet() + f"""
+            QFrame#ActionConfirmCard {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END});
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 20px;
+            }}
+            QLabel#ActionConfirmIcon {{
+                color: {ACCENT_TEXT_COLOR};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                border: none;
+                border-radius: 17px;
+                font-size: 18px;
+                font-weight: 900;
+            }}
+            QLabel#ActionConfirmEyebrow {{
+                color: {ACCENT_SECONDARY_COLOR};
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: 0px;
+                background: transparent;
+            }}
+            QLabel#ActionConfirmTitle {{
+                color: {TEXT_COLOR};
+                font-size: 17px;
+                font-weight: 800;
+                background: transparent;
+            }}
+            QLabel#ActionConfirmSectionTitle {{
+                color: {TEXT_COLOR};
+                font-size: 12px;
+                font-weight: 800;
+                background: transparent;
+            }}
+            QTextEdit#ActionConfirmDetails {{
+                background: {GLASS_COLOR};
+                color: {FIELD_TEXT_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 14px;
+                padding: 8px;
+                font-size: 12px;
+                selection-background-color: {ACCENT_TINT_STRONG};
+                selection-color: {TEXT_COLOR};
+            }}
+            QTextEdit#ActionConfirmDetails:focus {{
+                background: {FIELD_HOVER_COLOR};
+                border-color: {ACCENT_COLOR};
+            }}
+            QTextEdit#ActionConfirmDetails viewport {{
+                background: transparent;
+                color: {FIELD_TEXT_COLOR};
+            }}
+            QFrame#ActionConfirmHintFrame {{
+                background: {ACCENT_TINT};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 12px;
+            }}
+            QLabel#ActionConfirmHint {{
+                color: {MUTED_TEXT_COLOR};
+                font-size: 11px;
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#ActionConfirmAcceptButton {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                color: {ACCENT_TEXT_COLOR};
+                border: none;
+                border-radius: 16px;
+                padding: 9px 15px;
+                min-width: 88px;
+                font-size: 13px;
+                font-weight: 800;
+            }}
+            QPushButton#ActionConfirmAcceptButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
+            }}
+            QPushButton#ActionConfirmAcceptButton:pressed {{
+                background: {ACCENT_COLOR};
+                padding-top: 10px;
+                padding-bottom: 8px;
+            }}
+            QPushButton#ActionConfirmRejectButton {{
+                background: rgba(240,90,110,0.13);
+                color: {DANGER_COLOR};
+                border: none;
+                border-radius: 16px;
+                padding: 9px 14px;
+                min-width: 74px;
+                font-size: 13px;
+                font-weight: 800;
+            }}
+            QPushButton#ActionConfirmRejectButton:hover {{
+                background: rgba(240,90,110,0.20);
+            }}
+            QPushButton#ActionConfirmRejectButton:pressed {{
+                background: rgba(240,90,110,0.28);
+                padding-top: 10px;
+                padding-bottom: 8px;
+            }}
+        """
 
 class ApiKeyRequiredDialog(QDialog):
     def __init__(self, secret_key, provider_label, title, message, help_url="", parent=None):

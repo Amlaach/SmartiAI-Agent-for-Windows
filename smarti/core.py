@@ -527,7 +527,7 @@ class SmartiCore:
             return False
         if self.status_callback: self.status_callback("ממתין לאישור משתמש...")
         logging.info(f"\n--- ממתין לאישור משתמש ({redact_sensitive_text(title, self.settings)}) ---")
-        approved = self.ask_user_callback(title, text)
+        approved = self.ask_user_callback(title, text, risk)
         logging.info(f"--- המשתמש {'אישר' if approved else 'דחה'} את הפעולה ---\n")
         if getattr(self, "audit_logger", None):
             self.audit_logger.record("user_approval", {"title": title, "risk": risk, "approved": bool(approved), "details": text[:1500]}, self.settings)
