@@ -1043,7 +1043,16 @@ class SettingsPage(QWidget):
         link_label.setOpenExternalLinks(True)
         link_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         apply_high_contrast_link_label(link_label)
+        clear_btn = QPushButton()
+        clear_btn.setProperty("smartiSecretClearButton", True)
+        clear_btn.setFixedSize(34, 34)
+        clear_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        clear_btn.setToolTip("מחק מפתח שמור")
+        clear_btn.setStyleSheet(icon_button_css(34, danger=True))
+        set_themed_button_icon(clear_btn, ("delete_icon",), "X", 17, clear_text=True)
+        clear_btn.clicked.connect(edit.clear_secret if hasattr(edit, "clear_secret") else edit.clear)
         layout.addWidget(edit, 1)
+        layout.addWidget(clear_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(link_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
@@ -1592,6 +1601,7 @@ class SettingsPage(QWidget):
 
         self.api_key_edit.secretEdited.connect(self._on_api_key_edited)
         self.api_key_edit.editingFinished.connect(self._validate_current_api_key_before_save)
+        self.tavily_key.secretEdited.connect(lambda _=None: self._schedule_autosave())
 
         for edit in [
             self.tavily_key, self.local_url, self.email, self.pwd,
@@ -1624,7 +1634,10 @@ class SettingsPage(QWidget):
             self.api_key_status.setText("המפתח ייבדק לפני שמירה...")
             self.api_key_validation_timer.start()
         else:
-            self.api_key_status.setText("מפתח ריק לא יישמר.")
+            self._api_key_validation_generation += 1
+            self.api_key_validation_timer.stop()
+            self.api_key_status.setText("המפתח יימחק בשמירה.")
+            self._schedule_autosave()
 
     def _api_key_is_validated(self, provider, key):
         key = sanitize_secret_value(key)
@@ -1641,7 +1654,8 @@ class SettingsPage(QWidget):
         if not secret_key:
             return
         if not key:
-            self.api_key_status.setText("מפתח ריק לא נשמר.")
+            self.api_key_status.setText("המפתח יימחק בשמירה.")
+            self._schedule_autosave()
             return
         saved_key = sanitize_secret_value(self.core.settings.get(secret_key, ""))
         if key == saved_key or self._api_key_is_validated(provider, key):
@@ -1743,6 +1757,9 @@ class SettingsPage(QWidget):
         for button in self.findChildren(QPushButton):
             if button is self.back_btn or button in log_buttons:
                 continue
+            if button.property("smartiSecretClearButton"):
+                button.setStyleSheet(icon_button_css(34, danger=True))
+                continue
             parent = button.parent()
             if parent and parent.objectName() == "SegmentedControl":
                 continue
@@ -1820,14 +1837,20 @@ class SettingsPage(QWidget):
             secret_key = provider_secret_key(provider)
             candidate_key = sanitize_secret_value(self.api_key_edit.secret())
             previous_key = sanitize_secret_value(before.get(secret_key, "")) if secret_key else ""
-            if secret_key and (candidate_key == previous_key or self._api_key_is_validated(provider, candidate_key)):
+            if secret_key and not candidate_key:
+                self.core.mark_secret_for_deletion(secret_key)
+            elif secret_key and (candidate_key == previous_key or self._api_key_is_validated(provider, candidate_key)):
                 self.core.settings[secret_key] = candidate_key
             elif secret_key and candidate_key:
                 self.core.settings[secret_key] = previous_key
                 self._validate_current_api_key_before_save()
             elif secret_key:
                 self.core.settings[secret_key] = previous_key
-        self.core.settings["tavily_api_key"] = sanitize_secret_value(self.tavily_key.secret() if hasattr(self.tavily_key, "secret") else self.tavily_key.text())
+        tavily_key = sanitize_secret_value(self.tavily_key.secret() if hasattr(self.tavily_key, "secret") else self.tavily_key.text())
+        if tavily_key:
+            self.core.settings["tavily_api_key"] = tavily_key
+        else:
+            self.core.mark_secret_for_deletion("tavily_api_key")
         self.core.settings["local_server_url"] = self.local_url.text().strip() or "http://localhost:1234/v1"
         self.core.settings["email_address"] = self.email.text()
         self.core.settings["email_password"] = self.pwd.text().replace(" ", "")

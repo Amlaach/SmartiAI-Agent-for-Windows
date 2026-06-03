@@ -189,7 +189,7 @@ def _repair_markdown_links(text):
         return f"[{label or _display_label_for_href(href)}]({href})"
     return re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
 
-def _sanitize_rendered_links(rendered_html, link_color=None):
+def _sanitize_rendered_links(rendered_html, link_color=None, clickable=True):
     style = ""
     if link_color:
         style = (
@@ -204,6 +204,8 @@ def _sanitize_rendered_links(rendered_html, link_color=None):
         if not _is_valid_display_href(href):
             return inner
         display_inner = inner.strip() or html.escape(_display_label_for_href(href))
+        if not clickable:
+            return f'<span{style}>{display_inner}</span>'
         return f'<a href={quote}{html.escape(href, quote=True)}{quote}{style}>{display_inner}</a>'
     rendered_html = re.sub(r'<a\s+[^>]*href=(["\'])(.*?)\1[^>]*>(.*?)</a>', repl, str(rendered_html or ""), flags=re.IGNORECASE | re.DOTALL)
     rendered_html = re.sub(r'<a\s+[^>]*href\s*=\s*[^>]*>\s*</a>', '', rendered_html, flags=re.IGNORECASE | re.DOTALL)
@@ -400,6 +402,108 @@ def _soft_break_rendered_text(rendered_html):
         parts = re.split(r"(<[^>]+>)", segment)
         rendered.append("".join(part if part.startswith("<") and part.endswith(">") else _escape_with_soft_breaks(part) for part in parts))
     return "".join(rendered)
+
+def _trim_text_for_preview(text, limit=170):
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+def _strip_broken_markdown_link_syntax(text):
+    text = str(text or "")
+    text = re.sub(r"\[([^\]\n]{1,240})\]\([^)]*$", r"\1", text)
+    text = re.sub(r"\[([^\]\n]{1,240})$", r"\1", text)
+    return text
+
+def _render_markdown_links_fallback(text, link_color=None, clickable=True):
+    style = ""
+    if link_color:
+        style = (
+            f' style="color: {html.escape(str(link_color), quote=True)}; '
+            'text-decoration: underline; font-weight: 800;"'
+        )
+    link_re = re.compile(r"\[([^\]\n]{0,240})\]\(([^)\n]{1,1000})\)")
+    parts = []
+    last = 0
+    for match in link_re.finditer(str(text or "")):
+        parts.append(_escape_with_soft_breaks(text[last:match.start()]).replace('\n', '<br>'))
+        label = str(match.group(1) or "").strip()
+        href = _canonical_display_href(match.group(2))
+        display_label = label or _display_label_for_href(href)
+        inner = _escape_with_soft_breaks(display_label)
+        if _is_valid_display_href(href):
+            if clickable:
+                parts.append(f'<a href="{html.escape(href, quote=True)}"{style}>{inner}</a>')
+            else:
+                parts.append(f'<span{style}>{inner}</span>')
+        else:
+            parts.append(inner)
+        last = match.end()
+    parts.append(_escape_with_soft_breaks(str(text or "")[last:]).replace('\n', '<br>'))
+    return "".join(parts)
+
+def _markdown_preview_source(text, limit=170):
+    source = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not source:
+        return ""
+    link_re = re.compile(r"\[([^\]\n]{0,240})\]\(([^)\n]{1,1000})\)")
+    parts = []
+    used = 0
+    last = 0
+
+    def append_plain(value):
+        nonlocal used
+        if used >= limit:
+            return False
+        remaining = limit - used
+        value = str(value or "")
+        if len(value) <= remaining:
+            parts.append(value)
+            used += len(value)
+            return True
+        parts.append(_trim_text_for_preview(value, remaining))
+        used = limit
+        return False
+
+    for match in link_re.finditer(source):
+        if not append_plain(source[last:match.start()]):
+            break
+        label = str(match.group(1) or "").strip()
+        href = _canonical_display_href(match.group(2))
+        display_label = label or _display_label_for_href(href)
+        if _is_valid_display_href(href):
+            if used + len(display_label) <= limit:
+                parts.append(f"[{display_label}]({href})")
+                used += len(display_label)
+            else:
+                append_plain(display_label)
+                break
+        else:
+            if not append_plain(display_label):
+                break
+        last = match.end()
+    else:
+        append_plain(source[last:])
+
+    return _strip_broken_markdown_link_syntax("".join(parts).strip())
+
+def _render_markdown_html(text, link_color=None, is_user=False, style_blocks=True, clickable_links=True):
+    text = _repair_markdown_links(html.unescape(str(text or "")))
+    if not text.strip():
+        return ""
+    if MARKDOWN_INSTALLED:
+        try:
+            import markdown
+            safe_markdown = html.escape(text, quote=False)
+            rendered_html = markdown.markdown(safe_markdown, extensions=['tables', 'nl2br', 'sane_lists'])
+            rendered_html = _sanitize_rendered_links(rendered_html, link_color, clickable_links)
+            if style_blocks:
+                rendered_html = _style_markdown_blocks(rendered_html, is_user, None)
+            return _soft_break_rendered_text(rendered_html)
+        except Exception:
+            pass
+    rendered_html = _render_markdown_links_fallback(text, link_color, clickable_links)
+    return _sanitize_rendered_links(rendered_html, link_color, clickable_links)
 
 def _clean_step_for_display(text):
     clean = html.unescape(str(text or "")).strip()
@@ -990,20 +1094,7 @@ class MessageBubble(QFrame):
 
     def _render_markdown_segment(self, segment):
         text = str(segment or "").strip("\n")
-        if not text.strip():
-            return ""
-        if MARKDOWN_INSTALLED:
-            try:
-                import markdown
-                safe_markdown = html.escape(text, quote=False)
-                rendered_html = markdown.markdown(safe_markdown, extensions=['tables', 'nl2br', 'sane_lists'])
-                rendered_html = _sanitize_rendered_links(rendered_html, self._link_color())
-                rendered_html = _style_markdown_blocks(rendered_html, self.is_user, None)
-                return _soft_break_rendered_text(rendered_html)
-            except Exception:
-                pass
-        rendered_html = _escape_with_soft_breaks(text).replace('\n', '<br>')
-        return _sanitize_rendered_links(rendered_html, self._link_color())
+        return _render_markdown_html(text, self._link_color(), self.is_user, style_blocks=True)
 
     def _new_text_label(self, rendered_html):
         label = QLabel()
@@ -1638,7 +1729,8 @@ class ChatHistoryPage(QWidget):
         preview.setWordWrap(True)
         preview.setMinimumWidth(0)
         preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        preview.setText(_escape_plain_text_with_soft_breaks(record.get("preview", "")).replace("\n", "<br>"))
+        preview_source = record.get("preview_source") or record.get("preview", "")
+        preview.setText(_render_markdown_html(_markdown_preview_source(preview_source), ACCENT_COLOR, style_blocks=False, clickable_links=False))
         preview.setStyleSheet(muted_label_css(12) + " border: none;")
         row_layout.addWidget(preview)
 

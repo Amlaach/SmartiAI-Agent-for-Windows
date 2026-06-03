@@ -231,6 +231,7 @@ class ChatSessionStore:
             "pinned": bool(session.get("pinned", False)),
             "message_count": len(messages),
             "preview": preview,
+            "preview_source": _message_text(last_message),
             "title_score": title_score,
             "content_score": content_score,
             "match_kind": "title" if title_score >= max(0.55, content_score) else "content",

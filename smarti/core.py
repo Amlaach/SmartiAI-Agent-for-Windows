@@ -25,6 +25,7 @@ class SmartiCore:
         self._migrate_legacy_runtime_state()
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
+        self._secrets_pending_deletion = set()
         _CURRENT_SETTINGS_REF["settings"] = self.settings
         self.chat_store = ChatSessionStore(CHAT_HISTORY_FILE)
         self.chat_store.ensure_active_session()
@@ -4419,11 +4420,18 @@ class SmartiCore:
                 self.settings[key] = sanitize_secret_value(self.settings.get(key))
         data = copy.deepcopy(self.settings)
         data.pop("_runtime_trace", None)
+        secrets_pending_deletion = set(getattr(self, "_secrets_pending_deletion", set()))
         keyring_mod = get_keyring_module()
         if keyring_mod:
             for key in SENSITIVE_SETTING_KEYS:
                 value = data.get(key)
-                if value:
+                if key in secrets_pending_deletion:
+                    try:
+                        keyring_mod.delete_password(KEYRING_SERVICE, key)
+                    except Exception:
+                        pass
+                    data[key] = ""
+                elif value:
                     try:
                         keyring_mod.set_password(KEYRING_SERVICE, key, str(value))
                         data[key] = ""
@@ -4437,6 +4445,8 @@ class SmartiCore:
                     if not protected:
                         logging.error(f"Secret '{key}' could not be encrypted; it was not written to settings file.")
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        if secrets_pending_deletion:
+            self._secrets_pending_deletion.difference_update(secrets_pending_deletion)
 
     def _default_output_dir(self):
         configured = self.settings.get("default_output_dir") or OUTPUTS_DIR
@@ -4454,6 +4464,12 @@ class SmartiCore:
                 keyring_mod.delete_password(KEYRING_SERVICE, key)
             except Exception:
                 pass
+
+    def mark_secret_for_deletion(self, key):
+        key = str(key or "")
+        if key in SENSITIVE_SETTING_KEYS:
+            self.settings[key] = ""
+            self._secrets_pending_deletion.add(key)
 
     def reset_settings_to_defaults(self):
         backup_path = self.settings_manager.backup_existing()

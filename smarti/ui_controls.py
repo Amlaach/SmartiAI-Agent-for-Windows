@@ -79,7 +79,8 @@ class MaskedSecretLineEdit(QLineEdit):
         super().__init__(parent)
         self._secret_value = ""
         self._editing_secret = False
-        self.textEdited.connect(self._on_text_edited)
+        self.setClearButtonEnabled(True)
+        self.textChanged.connect(self._on_text_edited)
         self.set_secret(secret)
 
     def set_secret(self, value):
@@ -98,6 +99,16 @@ class MaskedSecretLineEdit(QLineEdit):
 
     def has_pending_secret(self):
         return self._editing_secret
+
+    def clear_secret(self):
+        self._secret_value = ""
+        self._editing_secret = True
+        previous = self.blockSignals(True)
+        self.setEchoMode(QLineEdit.EchoMode.Normal)
+        super().setText("")
+        self.blockSignals(previous)
+        self.setModified(True)
+        self.secretEdited.emit("")
 
     def _on_text_edited(self, text):
         self._editing_secret = True
@@ -122,7 +133,7 @@ class MaskedSecretLineEdit(QLineEdit):
 
     def focusOutEvent(self, event):
         if self._editing_secret and not sanitize_secret_value(self.text()):
-            self.set_secret(self._secret_value)
+            self.set_secret("")
         elif not self._editing_secret:
             self.set_secret(self._secret_value)
         else:
