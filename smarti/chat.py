@@ -6,8 +6,8 @@ from .ui_controls import *
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
-from .windows_notifications import WindowsNotificationCenter
-from PyQt6.QtCore import QEventLoop
+from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
+from PyQt6.QtCore import QEvent, QEventLoop
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
@@ -1870,9 +1870,11 @@ class ChatWindow(QMainWindow):
         self.tts_thread = None
         self._tts_workers = []
         self.pending_attachments = []
+        self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
-        self.notifications.reply_requested.connect(self.submit_quick_reply)
-        self.notifications.activate_requested.connect(self.bring_to_front)
+        self.notifications.reply_requested.connect(self.handle_notification_reply)
+        self.notifications.activate_requested.connect(self.handle_notification_activation)
+        self.notifications.attention_cleared.connect(self._clear_taskbar_attention)
         self.core_notification_signal.connect(self.handle_core_notification)
         self.core.notification_callback = lambda kind, payload=None: self.core_notification_signal.emit(kind, payload or {})
         
@@ -2352,12 +2354,34 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.about_page)
 
     def bring_to_front(self):
+        self._clear_taskbar_attention()
         if hasattr(self, "quick_reply_toast"):
             self.quick_reply_toast.hide()
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
         self.show()
         self.activateWindow()
         self.raise_()
+
+    def _request_taskbar_attention(self):
+        if self._should_notify_user() and hasattr(self, "taskbar_attention"):
+            self.taskbar_attention.request_attention()
+
+    def _clear_taskbar_attention(self):
+        if hasattr(self, "taskbar_attention"):
+            self.taskbar_attention.stop()
+
+    def handle_notification_reply(self, text):
+        self._clear_taskbar_attention()
+        self.submit_quick_reply(text)
+
+    def handle_notification_activation(self):
+        self._clear_taskbar_attention()
+        self.bring_to_front()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._clear_taskbar_attention()
 
     def _plain_notification_text(self, text, limit=520):
         cleaned = html.unescape(str(text or ""))
@@ -2370,6 +2394,7 @@ class ChatWindow(QMainWindow):
 
     def show_response_notification(self, response):
         tray_preview = self._plain_notification_text(response, 240)
+        self._request_taskbar_attention()
         try:
             if hasattr(self, "notifications"):
                 self.notifications.show_response(response)
@@ -2383,6 +2408,7 @@ class ChatWindow(QMainWindow):
         if not hasattr(self, "notifications"):
             return
         if kind == "toast":
+            self._request_taskbar_attention()
             self.notifications.show_notice(
                 payload.get("title") or SMARTI_APP_DISPLAY_NAME,
                 payload.get("body") or payload.get("message") or "",
@@ -2396,6 +2422,7 @@ class ChatWindow(QMainWindow):
             is_reminder = task.get("kind") == "reminder"
             if not is_reminder and not self._should_notify_user():
                 return
+            self._request_taskbar_attention()
             title = task.get("title") or ("תזכורת מסמארטי" if is_reminder else "משימת רקע הסתיימה")
             body = result or task.get("message") or task.get("prompt") or "המשימה הסתיימה."
             self.notifications.show_notice(title, body, kind="reminder" if is_reminder else "default")
@@ -2700,10 +2727,13 @@ class ChatWindow(QMainWindow):
         decision = {"value": "pending"}
 
         def answered(value):
+            self._clear_taskbar_attention()
             decision["value"] = value
 
+        self._request_taskbar_attention()
         shown = self.notifications.show_permission_request(title, text, risk, callback=answered)
         if not shown:
+            self._clear_taskbar_attention()
             return None
 
         loop = QEventLoop(self)
@@ -2716,6 +2746,7 @@ class ChatWindow(QMainWindow):
             try:
                 if self.core._is_cancel_requested():
                     decision["value"] = False
+                    self._clear_taskbar_attention()
                     loop.quit()
             except Exception:
                 pass
@@ -2732,6 +2763,7 @@ class ChatWindow(QMainWindow):
 
     def show_api_key_dialog(self, secret_key, provider_label, title, message, help_url):
         if self._should_notify_user() and hasattr(self, "notifications"):
+            self._request_taskbar_attention()
             self.notifications.show_notice(
                 title or "נדרשת הגדרת מפתח API",
                 message or f"סמארטי צריך מפתח עבור {provider_label}.",

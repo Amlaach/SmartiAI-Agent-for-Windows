@@ -5,6 +5,10 @@ try:
     import winreg
 except Exception:
     winreg = None
+try:
+    from ctypes import wintypes
+except Exception:
+    wintypes = None
 
 from PyQt6.QtCore import QObject
 
@@ -25,10 +29,74 @@ def ensure_windows_notification_identity():
         return False
 
 
+class TaskbarAttentionController(QObject):
+    FLASHW_STOP = 0x00000000
+    FLASHW_TRAY = 0x00000002
+    FLASHW_TIMERNOFG = 0x0000000C
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self._flashing = False
+
+    def request_attention(self):
+        if platform.system() != "Windows" or wintypes is None:
+            return False
+        if not self.window or self.window.isActiveWindow():
+            return False
+        hwnd = self._window_handle()
+        if not hwnd:
+            return False
+        if self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG):
+            self._flashing = True
+            return True
+        return False
+
+    def stop(self):
+        if not self._flashing or platform.system() != "Windows" or wintypes is None:
+            self._flashing = False
+            return False
+        hwnd = self._window_handle()
+        self._flashing = False
+        if not hwnd:
+            return False
+        return self._flash(hwnd, self.FLASHW_STOP)
+
+    def _window_handle(self):
+        try:
+            return int(self.window.winId())
+        except Exception:
+            return 0
+
+    def _flash(self, hwnd, flags):
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+
+        info = FLASHWINFO(
+            ctypes.sizeof(FLASHWINFO),
+            hwnd,
+            flags,
+            0,
+            0,
+        )
+        try:
+            return bool(ctypes.windll.user32.FlashWindowEx(ctypes.byref(info)))
+        except Exception as exc:
+            logging.warning("Taskbar flashing failed: %s", exc)
+            return False
+
+
 class SmartiGlassToast(QWidget):
     reply_submitted = pyqtSignal(str)
     permission_answered = pyqtSignal(object)
     activated = pyqtSignal()
+    dismissed = pyqtSignal()
 
     def __init__(
         self,
@@ -277,6 +345,8 @@ class SmartiGlassToast(QWidget):
     def _close_clicked(self):
         if self.permission_enabled and not self._closed_by_action:
             self.permission_answered.emit(False)
+        else:
+            self.dismissed.emit()
         self.hide()
         self.deleteLater()
 
@@ -292,6 +362,7 @@ class SmartiGlassToast(QWidget):
 class WindowsNotificationCenter(QObject):
     reply_requested = pyqtSignal(str)
     activate_requested = pyqtSignal()
+    attention_cleared = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -457,12 +528,19 @@ class WindowsNotificationCenter(QObject):
                     inputs = self._event_inputs(event_args)
                     reply = str(inputs.get("replyText") or inputs.get("reply") or "").strip()
                     if action == "reply" and reply:
+                        self.attention_cleared.emit()
                         self.reply_requested.emit(reply)
                     else:
+                        self.attention_cleared.emit()
                         self.activate_requested.emit()
                     cleanup()
 
+                def dismissed(_event_args):
+                    self.attention_cleared.emit()
+                    cleanup()
+
                 toast.on_activated = activated
+                toast.on_dismissed = dismissed
                 self._toaster.show_toast(toast)
                 return True
             except Exception as exc:
@@ -505,6 +583,7 @@ class WindowsNotificationCenter(QObject):
                         return
                     settled["done"] = True
                     cleanup()
+                    self.attention_cleared.emit()
                     if callback:
                         callback(value)
 
@@ -564,10 +643,16 @@ class WindowsNotificationCenter(QObject):
                 cleanup = self._track_native_toast(toast)
 
                 def activated(_event_args):
+                    self.attention_cleared.emit()
                     self.activate_requested.emit()
                     cleanup()
 
+                def dismissed(_event_args):
+                    self.attention_cleared.emit()
+                    cleanup()
+
                 toast.on_activated = activated
+                toast.on_dismissed = dismissed
                 self._toaster.show_toast(toast)
                 return True
             except Exception as exc:
@@ -586,9 +671,10 @@ class WindowsNotificationCenter(QObject):
                 pass
 
         toast.destroyed.connect(lambda *_: cleanup())
-        toast.reply_submitted.connect(self.reply_requested)
-        toast.activated.connect(self.activate_requested)
+        toast.reply_submitted.connect(lambda text: (self.attention_cleared.emit(), self.reply_requested.emit(text)))
+        toast.activated.connect(lambda: (self.attention_cleared.emit(), self.activate_requested.emit()))
+        toast.dismissed.connect(self.attention_cleared)
         if permission:
-            toast.permission_answered.connect(lambda value: permission_callback(value) if permission_callback else None)
+            toast.permission_answered.connect(lambda value: (self.attention_cleared.emit(), permission_callback(value) if permission_callback else None))
         toast.show_toast()
         return toast
