@@ -51,7 +51,7 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "DisplayName"; ValueData: "SmartiAI"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\assets\smarti.ico"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\_internal\assets\smarti.ico"; Flags: uninsdeletekey
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"

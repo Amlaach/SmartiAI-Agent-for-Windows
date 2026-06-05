@@ -238,7 +238,7 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $DistD
 
 Assert-ReleaseLayout -Root $DistDir -RequiredRelativePaths @(
     "SmartiAI.exe",
-    "assets\smarti.ico",
+    "_internal\assets\smarti.ico",
     "LICENSE",
     "README.md",
     "release_manifest.json",
