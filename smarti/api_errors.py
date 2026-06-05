@@ -442,16 +442,10 @@ def analyze_api_error(provider, model="", response=None, error=None, user_messag
 def api_retry_status_message(analysis, wait_seconds=0, next_attempt=1):
     label = analysis.provider_label
     wait_seconds = int(round(wait_seconds or 0))
-    suffix = f" (ניסיון {next_attempt})" if next_attempt else ""
+    suffix = f" | ניסיון {next_attempt}" if next_attempt else ""
     if wait_seconds <= 0:
-        return f"החיבור אל {label} נכשל רגעית, מנסה שוב מיד{suffix}..."
-    if analysis.category == "rate_limit":
-        return f"{label} מגביל כרגע את קצב הבקשות. ממתין {wait_seconds} שניות ואז מנסה שוב{suffix}..."
-    if analysis.category == "server_overload":
-        return f"יש עומס או תקלה זמנית אצל {label}. ממתין {wait_seconds} שניות ואז מנסה שוב{suffix}..."
-    if analysis.category == "timeout":
-        return f"{label} לא ענה בזמן. ממתין {wait_seconds} שניות ואז מנסה שוב{suffix}..."
-    return f"ממתין {wait_seconds} שניות ואז מנסה שוב מול {label}{suffix}..."
+        return f"{label}: מנסה שוב מיד{suffix}..."
+    return f"{label}: ממתין {wait_seconds} שנ׳{suffix}"
 
 
 def api_retry_exhausted_analysis(analysis, wait_too_long=False):

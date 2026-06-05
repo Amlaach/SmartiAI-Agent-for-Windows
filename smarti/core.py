@@ -395,11 +395,17 @@ class SmartiCore:
         if self._is_cancel_requested():
             raise SmartiCancelled("CANCELLED_BY_USER")
 
-    def _sleep_with_cancel(self, seconds):
+    def _sleep_with_cancel(self, seconds, tick_callback=None):
         end_at = time.time() + max(0, float(seconds or 0))
+        last_remaining = None
         while time.time() < end_at:
             if self._is_cancel_requested():
                 return False
+            if tick_callback:
+                remaining = max(0, int((end_at - time.time()) + 0.999))
+                if remaining != last_remaining:
+                    tick_callback(remaining)
+                    last_remaining = remaining
             time.sleep(min(0.5, max(0, end_at - time.time())))
         return True
 
@@ -5171,7 +5177,10 @@ CWD: {current_dir}
                         raise ApiRequestError(api_retry_exhausted_analysis(analysis, wait_too_long=True))
                     if self.status_callback:
                         self.status_callback(api_retry_status_message(analysis, wait_seconds, retries + immediate_retries + 1))
-                    if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds):
+                    def tick_retry_status(remaining, analysis=analysis, attempt=retries + immediate_retries + 1):
+                        if self.status_callback:
+                            self.status_callback(api_retry_status_message(analysis, remaining, attempt))
+                    if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds, tick_retry_status):
                         raise Exception("CANCELLED_BY_USER")
                     retries += 1
                     continue
@@ -9771,38 +9780,55 @@ if __name__ == "__main__":
 
     def speak_text(self, text):
         if not TTS_INSTALLED: return
-        try:
-            from gtts import gTTS
-            import pygame
-        except ImportError:
+        clean = re.sub(r'[*_#`~]', '', str(text or ""))
+        if not clean.strip():
             return
         self.stop_speaking()
         with self.tts_lock:
             self._stop_speech_flag = False
             if self.tts_status_callback: self.tts_status_callback(True)
             try:
-                clean = re.sub(r'[*_#`~]', '', text)
-                if not clean.strip(): return
-                try: tts = gTTS(text=clean, lang='iw')
-                except: tts = gTTS(text=clean, lang='he')
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp: path = fp.name
-                tts.save(path)
-                try:
-                    pygame.mixer.init()
-                    pygame.mixer.music.load(path)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy() and not self._stop_speech_flag: pygame.time.Clock().tick(10)
-                finally:
-                    try: pygame.mixer.music.stop()
-                    except: pass
-                    try: pygame.mixer.music.unload()
-                    except: pass
-                    pygame.mixer.quit()
-                try: os.remove(path)
-                except: pass
+                self._speak_text_with_gtts(clean)
             except Exception as e: logging.error(f"TTS Error: {e}")
             finally:
                 if self.tts_status_callback: self.tts_status_callback(False)
+
+    def _speak_text_with_gtts(self, clean):
+        from gtts import gTTS
+        import pygame
+        try:
+            volume = float(self.settings.get("tts_volume", 100))
+        except Exception:
+            volume = 100
+        tld = str(self.settings.get("tts_voice_id", "co.il") or "co.il").strip()
+        tld = tld if any(tld == voice.get("id") for voice in GOOGLE_HEBREW_TTS_VOICES) else "co.il"
+        try: tts = gTTS(text=clean, lang='iw', tld=tld, slow=False)
+        except: tts = gTTS(text=clean, lang='he', tld=tld, slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        path = ""
+        try:
+            pygame.mixer.init()
+            try:
+                pygame.mixer.music.load(audio_buffer, "mp3")
+            except Exception:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+                    path = fp.name
+                    fp.write(audio_buffer.getvalue())
+                pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(max(0.0, min(1.0, volume / 100.0 if volume > 1 else volume)))
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy() and not self._stop_speech_flag: pygame.time.Clock().tick(10)
+        finally:
+            try: pygame.mixer.music.stop()
+            except: pass
+            try: pygame.mixer.music.unload()
+            except: pass
+            pygame.mixer.quit()
+            if path:
+                try: os.remove(path)
+                except: pass
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

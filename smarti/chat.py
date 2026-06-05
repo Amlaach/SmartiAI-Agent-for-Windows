@@ -1836,6 +1836,7 @@ class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
     core_notification_signal = pyqtSignal(str, object)
+    voice_hotkey_signal = pyqtSignal()
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
@@ -1869,6 +1870,11 @@ class ChatWindow(QMainWindow):
         self.tts_active = False
         self.tts_thread = None
         self._tts_workers = []
+        self.voice_thread = None
+        self._voice_hotkey_handle = None
+        self._quit_requested = False
+        self._tray_close_hint_shown = False
+        self._suppress_menu_open_once = False
         self.pending_attachments = []
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
@@ -1890,7 +1896,9 @@ class ChatWindow(QMainWindow):
             self.tray_icon.setIcon(QIcon(dummy_pixmap))
             
         self.tray_icon.messageClicked.connect(self.bring_to_front)
+        self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.setToolTip(SMARTI_APP_DISPLAY_NAME)
+        self._setup_tray_menu()
         self.tray_icon.show()
         # Custom QuickReplyToast fallback is intentionally disabled.
         # self.quick_reply_toast = QuickReplyToast()
@@ -1899,6 +1907,7 @@ class ChatWindow(QMainWindow):
         self.gui_message_signal.connect(self.add_message)
         self.core.print_callback = lambda txt, is_user: self.gui_message_signal.emit(txt, is_user)
         self.tts_status_signal.connect(self.on_tts_status)
+        self.voice_hotkey_signal.connect(self.trigger_voice_from_hotkey)
         self.core.tts_status_callback = lambda is_playing: self.tts_status_signal.emit(is_playing)
         
         self.setWindowTitle(SMARTI_APP_DISPLAY_NAME)
@@ -1940,15 +1949,125 @@ class ChatWindow(QMainWindow):
         self.load_active_chat_session()
         QTimer.singleShot(1200, self.core.resume_background_tasks)
         
-        if SPEECH_INSTALLED:
+        app = QApplication.instance()
+        if app:
+            app.aboutToQuit.connect(self.unregister_voice_hotkey)
+
+        if SPEECH_INSTALLED and KEYBOARD_INSTALLED:
             QTimer.singleShot(1500, self.register_voice_hotkey)
 
     def register_voice_hotkey(self):
         try:
+            if self._voice_hotkey_handle is not None:
+                self.unregister_voice_hotkey()
             import keyboard
-            keyboard.add_hotkey('alt+v', self.trigger_voice_from_hotkey)
+            hotkey = str(self.core.settings.get("voice_hotkey", "alt+v") or "alt+v")
+            self._voice_hotkey_handle = keyboard.add_hotkey(hotkey, lambda: self.voice_hotkey_signal.emit())
         except Exception as e:
             logging.warning(f"Voice hotkey registration failed: {e}")
+
+    def unregister_voice_hotkey(self):
+        handle = getattr(self, "_voice_hotkey_handle", None)
+        if handle is None:
+            return
+        try:
+            import keyboard
+            keyboard.remove_hotkey(handle)
+        except Exception:
+            pass
+        self._voice_hotkey_handle = None
+
+    def _setup_tray_menu(self):
+        self.tray_menu = QMenu()
+        self.tray_menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.tray_menu.setStyleSheet(menu_stylesheet())
+        self.tray_open_action = self.tray_menu.addAction("פתח את SmartiAI")
+        self.tray_open_action.triggered.connect(self.bring_to_front)
+        self.tray_listen_action = self.tray_menu.addAction("התחל האזנה")
+        self.tray_listen_action.triggered.connect(self.start_voice_from_tray)
+        self.tray_stop_tts_action = self.tray_menu.addAction("עצור הקראה")
+        self.tray_stop_tts_action.triggered.connect(self.stop_tts_from_tray)
+        self.tray_menu.addSeparator()
+        self.tray_new_chat_action = self.tray_menu.addAction("שיחה חדשה")
+        self.tray_new_chat_action.triggered.connect(self.start_new_chat_from_tray)
+        self.tray_settings_action = self.tray_menu.addAction("הגדרות")
+        self.tray_settings_action.triggered.connect(self.show_settings_from_tray)
+        self.tray_tasks_action = self.tray_menu.addAction("מרכז משימות")
+        self.tray_tasks_action.triggered.connect(self.show_task_center_from_tray)
+        self.tray_menu.addSeparator()
+        self.tray_quit_action = self.tray_menu.addAction("יציאה")
+        self.tray_quit_action.triggered.connect(self.quit_from_tray)
+        self.tray_menu.aboutToShow.connect(self._refresh_tray_menu)
+        self.tray_icon.setContextMenu(self.tray_menu)
+
+    def _refresh_tray_menu(self):
+        voice_running = bool(getattr(self, "voice_thread", None) and self.voice_thread.isRunning())
+        self.tray_listen_action.setEnabled(not self.agent_running and not voice_running and SPEECH_INSTALLED)
+        self.tray_stop_tts_action.setEnabled(bool(self.tts_active))
+
+    def on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self.bring_to_front()
+
+    def start_voice_from_tray(self):
+        self.bring_to_front()
+        self.trigger_voice_from_hotkey()
+
+    def stop_tts_from_tray(self):
+        self.core.stop_speaking()
+        self.tts_active = False
+        self.active_tts_container = None
+        self._refresh_message_tts_buttons()
+
+    def start_new_chat_from_tray(self):
+        self.bring_to_front()
+        self.start_new_chat()
+
+    def show_settings_from_tray(self):
+        self.bring_to_front()
+        self.show_settings_page()
+
+    def show_task_center_from_tray(self):
+        self.bring_to_front()
+        self.show_task_center_page()
+
+    def quit_from_tray(self):
+        self._quit_requested = True
+        self.core.stop_speaking()
+        self.unregister_voice_hotkey()
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.hide()
+        app = QApplication.instance()
+        if app:
+            app.quit()
+
+    def attach_instance_server(self, server):
+        self._instance_server = server
+        server.newConnection.connect(self._handle_instance_command)
+
+    def _handle_instance_command(self):
+        server = getattr(self, "_instance_server", None)
+        if not server:
+            return
+        while server.hasPendingConnections():
+            socket = server.nextPendingConnection()
+            if socket.waitForReadyRead(250):
+                command = bytes(socket.readAll()).decode("utf-8", "ignore").strip()
+            else:
+                command = "show_new_chat"
+            socket.disconnectFromServer()
+            if command == "voice":
+                self.open_new_chat_from_activation(start_listening=True)
+            else:
+                self.open_new_chat_from_activation(start_listening=False)
+
+    def open_new_chat_from_activation(self, start_listening=False):
+        if not self.agent_running:
+            self.start_new_chat()
+        self.stacked_widget.setCurrentWidget(self.chat_page)
+        self.bring_to_front()
+        if start_listening and not self.agent_running:
+            QTimer.singleShot(150, self.start_voice)
 
     def _chat_page_stylesheet(self):
         return f"""
@@ -2135,6 +2254,7 @@ class ChatWindow(QMainWindow):
         if hasattr(self.menu, "setIconSize"):
             self.menu.setIconSize(QSize(22, 22))
         self.menu.setStyleSheet(menu_stylesheet())
+        self.menu.aboutToHide.connect(self._guard_menu_reopen_from_button)
         self._menu_actions = []
         self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
         self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
@@ -2383,6 +2503,16 @@ class ChatWindow(QMainWindow):
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self._clear_taskbar_attention()
 
+    def closeEvent(self, event):
+        if getattr(self, "_quit_requested", False) or not self.core.settings.get("keep_running_in_tray", True):
+            self.unregister_voice_hotkey()
+            if hasattr(self, "tray_icon"):
+                self.tray_icon.hide()
+            event.accept()
+            return
+        event.ignore()
+        self.hide()
+
     def _plain_notification_text(self, text, limit=520):
         cleaned = html.unescape(str(text or ""))
         cleaned = re.sub(r"```.*?```", "קטע קוד", cleaned, flags=re.DOTALL)
@@ -2512,7 +2642,27 @@ class ChatWindow(QMainWindow):
             self.active_tts_container = None
             self._refresh_message_tts_buttons()
 
-    def show_menu(self): self.menu.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height())))
+    def _clear_menu_reopen_guard(self):
+        self._suppress_menu_open_once = False
+
+    def _menu_button_contains_cursor(self):
+        return self.menu_btn.rect().contains(self.menu_btn.mapFromGlobal(QCursor.pos()))
+
+    def _guard_menu_reopen_from_button(self):
+        if self._menu_button_contains_cursor():
+            self._suppress_menu_open_once = True
+            QTimer.singleShot(220, self._clear_menu_reopen_guard)
+
+    def show_menu(self):
+        if self._suppress_menu_open_once:
+            self._suppress_menu_open_once = False
+            return
+        if self.menu.isVisible():
+            self._suppress_menu_open_once = True
+            self.menu.hide()
+            QTimer.singleShot(220, self._clear_menu_reopen_guard)
+            return
+        self.menu.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height())))
 
     def show_attachment_menu(self):
         # Kept as a compatibility shim for older signal wiring; no menu is shown.
@@ -2661,19 +2811,30 @@ class ChatWindow(QMainWindow):
         self.process_request(text, attachments=attachments)
 
     def trigger_voice_from_hotkey(self):
-        if not self.agent_running: QTimer.singleShot(0, self.start_voice)
+        if self.agent_running:
+            return
+        was_hidden = not self.isVisible()
+        if was_hidden:
+            self.start_new_chat()
+        self.bring_to_front()
+        QTimer.singleShot(0, self.start_voice)
 
     def start_voice(self):
+        if self.agent_running:
+            return
+        if getattr(self, "voice_thread", None) and self.voice_thread.isRunning():
+            return
         self.core.stop_speaking() 
-        self.status_lbl.setText("מקשיב...")
+        self.status_lbl.setText("מפעיל האזנה...")
         self.input_field.setEnabled(False)
         self.action_btn.setEnabled(False)
-        self.voice_thread = VoiceWorker()
+        self.voice_thread = VoiceWorker(self.core.settings)
         self.voice_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
         self.voice_thread.finished_signal.connect(self.on_voice_finished)
         self.voice_thread.start()
 
     def on_voice_finished(self, text):
+        self.voice_thread = None
         self.status_lbl.setText("")
         self.input_field.setEnabled(True)
         self.action_btn.setEnabled(True)

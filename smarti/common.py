@@ -247,7 +247,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QG
                              QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
                              QScrollArea, QFrame, QMenu, QLineEdit,
                              QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem, QAbstractItemView)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF, QUrl
+from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF, QUrl
 from PyQt6.QtGui import QIcon, QFont, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage, QDesktopServices
 
 DOCX_INSTALLED = importlib.util.find_spec("docx") is not None
@@ -255,8 +255,22 @@ PDF_INSTALLED = importlib.util.find_spec("PyPDF2") is not None
 BS4_INSTALLED = importlib.util.find_spec("bs4") is not None
 MARKDOWN_INSTALLED = importlib.util.find_spec("markdown") is not None
 PILLOW_INSTALLED = importlib.util.find_spec("PIL") is not None
-SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None and importlib.util.find_spec("keyboard") is not None
-TTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
+KEYBOARD_INSTALLED = importlib.util.find_spec("keyboard") is not None
+SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None
+GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
+TTS_INSTALLED = GTTS_INSTALLED
+
+GOOGLE_HEBREW_TTS_VOICES = [
+    {"id": "co.il", "name": "Google עברית - ישראל", "tld": "co.il"},
+    {"id": "com", "name": "Google עברית - כללי", "tld": "com"},
+    {"id": "co.uk", "name": "Google עברית - UK", "tld": "co.uk"},
+    {"id": "com.au", "name": "Google עברית - Australia", "tld": "com.au"},
+    {"id": "ca", "name": "Google עברית - Canada", "tld": "ca"},
+    {"id": "co.in", "name": "Google עברית - India", "tld": "co.in"},
+]
+
+def list_tts_voices(refresh=False):
+    return copy.deepcopy(GOOGLE_HEBREW_TTS_VOICES if GTTS_INSTALLED else [])
 
 APP_DIR = SMARTI_RUNTIME.app_dir
 RESOURCE_DIR = SMARTI_RUNTIME.resource_dir

@@ -59,6 +59,29 @@ class VoiceWorker(QThread):
     finished_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
 
+    def __init__(self, settings=None):
+        super().__init__()
+        self.settings = copy.deepcopy(settings or {})
+
+    def _setting_float(self, key, default, minimum, maximum):
+        try:
+            value = float(self.settings.get(key, default))
+        except Exception:
+            value = default
+        return max(minimum, min(maximum, value))
+
+    def _setting_int(self, key, default, minimum, maximum):
+        try:
+            value = int(float(self.settings.get(key, default)))
+        except Exception:
+            value = default
+        return max(minimum, min(maximum, value))
+
+    def _energy_threshold_from_sensitivity(self):
+        sensitivity = self._setting_int("voice_sensitivity", 70, 1, 100)
+        ratio = (100 - sensitivity) / 99.0
+        return int(50 + (4000 - 50) * (ratio ** 2.3))
+
     def run(self):
         if not SPEECH_INSTALLED:
             self.finished_signal.emit("")
@@ -69,22 +92,35 @@ class VoiceWorker(QThread):
             self.finished_signal.emit("")
             return
         r = sr.Recognizer()
-        r.pause_threshold = 2.0  
+        r.energy_threshold = self._energy_threshold_from_sensitivity()
+        r.dynamic_energy_threshold = bool(self.settings.get("voice_dynamic_energy_threshold", False))
+        r.pause_threshold = self._setting_float("voice_pause_threshold", 0.8, 0.3, 5.0)
+        r.non_speaking_duration = max(0.1, min(1.0, r.pause_threshold / 2.0))
+        listen_timeout = self._setting_float("voice_listen_timeout", 6, 1, 30)
+        ambient_duration = self._setting_float("voice_ambient_noise_duration", 0.0, 0.0, 3.0)
         try:
+            self.status_signal.emit("פותח מיקרופון...")
             with sr.Microphone() as source:
-                try: winsound.Beep(1000, 150)
-                except: pass
+                if ambient_duration > 0:
+                    self.status_signal.emit("מכוון רעש רקע...")
+                    r.adjust_for_ambient_noise(source, duration=ambient_duration)
+                if bool(self.settings.get("voice_beep_enabled", False)):
+                    try: winsound.Beep(1000, 90)
+                    except: pass
                 self.status_signal.emit("מקשיב...")
-                try: audio = r.listen(source, timeout=10, phrase_time_limit=45)
+                try: audio = r.listen(source, timeout=listen_timeout)
                 except sr.WaitTimeoutError:
                     self.finished_signal.emit("")
                     return
-                try: winsound.Beep(800, 150)
-                except: pass
+                if bool(self.settings.get("voice_beep_enabled", False)):
+                    try: winsound.Beep(800, 90)
+                    except: pass
                 self.status_signal.emit("מתמלל...")
                 text = r.recognize_google(audio, language="he-IL").replace("סמרטי", "סמארטי").replace("סמארט", "סמארטי")
                 self.finished_signal.emit(text)
-        except Exception: self.finished_signal.emit("")
+        except Exception:
+            logging.exception("Voice recognition failed.")
+            self.finished_signal.emit("")
 
 class TTSWorker(QThread):
     def __init__(self, core, text):

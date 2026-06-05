@@ -7,7 +7,11 @@ class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
     PRESERVE_ON_V2_MIGRATION = {
         "api_mode", "local_server_url", "shopping_list", "user_memory",
-        "read_aloud_all", "read_aloud_voice_only", "legal_acceptance"
+        "read_aloud_all", "read_aloud_voice_only", "tts_voice_id", "tts_volume",
+        "voice_hotkey", "keep_running_in_tray",
+        "voice_sensitivity", "voice_dynamic_energy_threshold", "voice_pause_threshold",
+        "voice_listen_timeout", "voice_ambient_noise_duration",
+        "voice_beep_enabled", "legal_acceptance"
     } | {f"selected_{provider}_model" for provider in MODEL_PROVIDER_ORDER}
 
     def __init__(self, settings_file, defaults):

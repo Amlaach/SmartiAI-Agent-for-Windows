@@ -72,6 +72,383 @@ class NoScrollComboBox(QComboBox):
         self.view().setMaximumWidth(max(220, self.width()))
         super().showPopup()
 
+class ModelSearchLineEdit(QLineEdit):
+    navigateRequested = pyqtSignal(int)
+    commitRequested = pyqtSignal()
+    dismissRequested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Down:
+            self.navigateRequested.emit(1)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Up:
+            self.navigateRequested.emit(-1)
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.commitRequested.emit()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape:
+            self.dismissRequested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+class SearchableModelComboBox(NoScrollComboBox):
+    modelCommitted = pyqtSignal(str)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._all_models = []
+        self._selected_model = ""
+        self._placeholder_text = "לא נמצאו מודלים"
+        self._loading = False
+        self._popup = None
+        self._suppress_next_show = False
+        self._suppress_next_release = False
+        self._app_filter_installed = False
+        self.search_edit = None
+        self.results_list = None
+        self.setEditable(False)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.setStyleSheet(COMBOBOX_CSS)
+        if self.search_edit:
+            self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        if self.results_list:
+            self.results_list.setStyleSheet(
+                f"QListWidget {{ background: {FIELD_COLOR}; color: {TEXT_COLOR}; border: none; "
+                f"border-radius: 12px; padding: 4px; outline: none; }}"
+                f"QListWidget::item {{ padding: 8px 10px; border-radius: 8px; }}"
+                f"QListWidget::item:hover {{ background: {HOVER_TINT}; }}"
+                f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
+            )
+        if self._popup:
+            self._popup.setStyleSheet(
+                f"QFrame {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                f"border-radius: 16px; padding: 6px; }}"
+            )
+
+    def set_loading_text(self, text):
+        self._all_models = []
+        self._selected_model = ""
+        self._loading = True
+        self.setEnabled(False)
+        previous = self.blockSignals(True)
+        self.clear()
+        self.addItem(str(text or ""))
+        self.setCurrentIndex(0)
+        self.blockSignals(previous)
+        self.hidePopup()
+
+    def set_models(self, models, selected_model=""):
+        seen = set()
+        cleaned = []
+        for model in models or []:
+            model = str(model or "").strip()
+            if model and model not in seen:
+                cleaned.append(model)
+                seen.add(model)
+        selected_model = str(selected_model or "").strip()
+        if selected_model and selected_model not in seen:
+            cleaned.insert(0, selected_model)
+        self._all_models = cleaned
+        self._loading = False
+        self.setEnabled(True)
+        previous = self.blockSignals(True)
+        self.clear()
+        self.addItems(cleaned or ([selected_model] if selected_model else []))
+        self.blockSignals(previous)
+        self.set_current_model(selected_model if selected_model in cleaned else (cleaned[0] if cleaned else selected_model))
+
+    def selected_model(self):
+        return self._selected_model
+
+    def currentText(self):
+        return self._selected_model or super().currentText()
+
+    def set_current_model(self, model):
+        model = str(model or "").strip()
+        if not model:
+            return
+        previous = self.blockSignals(True)
+        if self.findText(model) < 0:
+            self.addItem(model)
+        self.setCurrentText(model)
+        self.blockSignals(previous)
+        self._selected_model = model
+        self.hidePopup()
+
+    def _ensure_popup(self):
+        if self._popup:
+            return
+        self._popup = QFrame(None, Qt.WindowType.Popup)
+        self._popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._popup.installEventFilter(self)
+        layout = QVBoxLayout(self._popup)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        self.search_edit = ModelSearchLineEdit()
+        self.search_edit.setPlaceholderText("חפש מודל")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textEdited.connect(self._on_search_text_edited)
+        self.search_edit.navigateRequested.connect(self._move_highlight)
+        self.search_edit.commitRequested.connect(self._commit_from_keyboard)
+        self.search_edit.dismissRequested.connect(self.hidePopup)
+        self.results_list = QListWidget()
+        self.results_list.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.results_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.results_list.itemClicked.connect(lambda item: self._commit_model(item.text()))
+        self.results_list.itemActivated.connect(lambda item: self._commit_model(item.text()))
+        layout.addWidget(self.search_edit)
+        layout.addWidget(self.results_list)
+        self.apply_theme()
+
+    def _clear_popup_toggle_guard(self):
+        self._suppress_next_show = False
+
+    def _combo_contains_global_pos(self, pos):
+        return self.rect().contains(self.mapFromGlobal(pos))
+
+    def _cursor_is_over_combo(self):
+        return self._combo_contains_global_pos(QCursor.pos())
+
+    def _event_global_pos(self, event):
+        if hasattr(event, "globalPosition"):
+            return event.globalPosition().toPoint()
+        if hasattr(event, "globalPos"):
+            return event.globalPos()
+        return QCursor.pos()
+
+    def _install_popup_event_filter(self):
+        if self._app_filter_installed:
+            return
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+            self._app_filter_installed = True
+
+    def _remove_popup_event_filter(self):
+        if not self._app_filter_installed:
+            return
+        app = QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        self._app_filter_installed = False
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and self._popup
+            and self._popup.isVisible()
+            and self._combo_contains_global_pos(self._event_global_pos(event))
+        ):
+            self._suppress_next_show = True
+            self._suppress_next_release = True
+            self._popup.hide()
+            self._remove_popup_event_filter()
+            QTimer.singleShot(220, self._clear_popup_toggle_guard)
+            return True
+        if watched is self._popup and event.type() == QEvent.Type.Hide:
+            if self._cursor_is_over_combo():
+                self._suppress_next_show = True
+                QTimer.singleShot(220, self._clear_popup_toggle_guard)
+            self._remove_popup_event_filter()
+        return super().eventFilter(watched, event)
+
+    def _normalize_search_text(self, text):
+        return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+    def _tokens_for_search(self, text):
+        normalized = self._normalize_search_text(text)
+        raw_tokens = re.findall(r"[a-z0-9]+", normalized)
+        tokens = []
+        for index, token in enumerate(raw_tokens):
+            match = re.fullmatch(r"(\d+)([a-z]+)", token)
+            if match:
+                tokens.extend([match.group(1), match.group(2)])
+            elif token:
+                tokens.append(token)
+            if token.isdigit() and index + 1 < len(raw_tokens) and raw_tokens[index + 1] in {"b", "bn", "m", "k"}:
+                tokens.append(token + raw_tokens[index + 1])
+        seen = set()
+        return [token for token in tokens if not (token in seen or seen.add(token))]
+
+    def _score_model(self, query, model):
+        query_tokens = self._tokens_for_search(query)
+        if not query_tokens:
+            return 1.0
+        model_text = self._normalize_search_text(model)
+        model_tokens = self._tokens_for_search(model)
+        compact_model = model_text.replace(" ", "")
+        compact_query = self._normalize_search_text(query).replace(" ", "")
+        score = 0.0
+        for token in query_tokens:
+            token_score = 0.0
+            for candidate in model_tokens:
+                if candidate == token:
+                    token_score = max(token_score, 1.0)
+                elif candidate.startswith(token):
+                    token_score = max(token_score, 0.92)
+                elif token.startswith(candidate) and len(candidate) >= 3:
+                    token_score = max(token_score, 0.86)
+                elif len(token) >= 3 and token in candidate:
+                    token_score = max(token_score, 0.82)
+                elif len(token) >= 4:
+                    token_score = max(token_score, difflib.SequenceMatcher(None, token, candidate).ratio())
+            if len(token) >= 3 and token in compact_model:
+                token_score = max(token_score, 0.78)
+            threshold = 0.88 if token.isdigit() else (0.72 if len(token) >= 4 else 0.82)
+            if token_score < threshold:
+                return 0.0
+            score += token_score
+        if compact_query and compact_query in compact_model:
+            score += 1.25
+        if model_text.startswith(self._normalize_search_text(query)):
+            score += 0.7
+        return score / max(1, len(query_tokens))
+
+    def _filtered_models(self, query):
+        query = str(query or "").strip()
+        if not query:
+            return self._all_models[:]
+        scored = []
+        for model in self._all_models:
+            score = self._score_model(query, model)
+            if score > 0:
+                scored.append((score, len(model), model))
+        scored.sort(key=lambda item: (-item[0], item[1], item[2].lower()))
+        return [model for _, _, model in scored[:250]]
+
+    def _on_search_text_edited(self, text):
+        if self._loading:
+            return
+        matches = self._filtered_models(text)
+        self._show_results(matches)
+
+    def _show_results(self, matches):
+        self._ensure_popup()
+        self.results_list.clear()
+        if not matches:
+            item = QListWidgetItem(self._placeholder_text)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.results_list.addItem(item)
+        else:
+            for model in matches:
+                self.results_list.addItem(QListWidgetItem(model))
+        self.results_list.clearSelection()
+        current_row = self._row_for_model(self._selected_model)
+        self.results_list.setCurrentRow(current_row if current_row >= 0 else -1)
+
+    def _row_for_model(self, model):
+        model = str(model or "")
+        if not model or not self.results_list:
+            return -1
+        for row in range(self.results_list.count()):
+            if self.results_list.item(row).text() == model:
+                return row
+        return -1
+
+    def _move_highlight(self, direction):
+        self._ensure_popup()
+        selectable = [
+            row for row in range(self.results_list.count())
+            if self.results_list.item(row).flags() & Qt.ItemFlag.ItemIsSelectable
+        ]
+        if not selectable:
+            return
+        current = self.results_list.currentRow()
+        if current not in selectable:
+            next_row = selectable[0] if direction > 0 else selectable[-1]
+        else:
+            pos = selectable.index(current)
+            next_row = selectable[(pos + direction) % len(selectable)]
+        self.results_list.setCurrentRow(next_row)
+
+    def _commit_from_keyboard(self):
+        typed = str(self.search_edit.text() or "").strip()
+        if typed in self._all_models:
+            self._commit_model(typed)
+            return
+        row = self.results_list.currentRow()
+        if row >= 0:
+            item = self.results_list.item(row)
+            if item and item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                self._commit_model(item.text())
+
+    def _commit_model(self, model):
+        model = str(model or "").strip()
+        if not model or model == self._placeholder_text:
+            return
+        self.set_current_model(model)
+        self.modelCommitted.emit(model)
+
+    def showPopup(self):
+        if self._loading:
+            return
+        if self._popup and self._popup.isVisible():
+            self.hidePopup()
+            return
+        if self._suppress_next_show:
+            self._suppress_next_show = False
+            return
+        self._ensure_popup()
+        previous = self.search_edit.blockSignals(True)
+        self.search_edit.clear()
+        self.search_edit.blockSignals(previous)
+        self._show_results(self._all_models)
+        popup_w = max(1, self.width())
+        row_h = self.results_list.sizeHintForRow(0)
+        row_h = row_h if row_h > 0 else 34
+        list_h = min(360, max(180, row_h * min(max(1, self.results_list.count()), 10) + 24))
+        self.results_list.setFixedHeight(list_h)
+        self._popup.setFixedWidth(popup_w)
+        self._popup.adjustSize()
+        pos = self.mapToGlobal(QPoint(0, self.height()))
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            if pos.x() + popup_w > available.right():
+                pos.setX(max(available.left(), available.right() - popup_w))
+            if pos.y() + self._popup.height() > available.bottom():
+                pos = self.mapToGlobal(QPoint(0, -self._popup.height()))
+        self._popup.move(pos)
+        self._popup.show()
+        self._popup.move(pos)
+        self._install_popup_event_filter()
+        self.search_edit.setFocus()
+
+    def hidePopup(self):
+        if self._popup:
+            self._popup.hide()
+        self._remove_popup_event_filter()
+
+    def mousePressEvent(self, event):
+        if self._popup and self._popup.isVisible():
+            self.hidePopup()
+            self._suppress_next_release = True
+            event.accept()
+            return
+        if self._suppress_next_show:
+            self._suppress_next_show = False
+            self._suppress_next_release = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._suppress_next_release:
+            self._suppress_next_release = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 class MaskedSecretLineEdit(QLineEdit):
     secretEdited = pyqtSignal(str)
 
@@ -279,6 +656,40 @@ class RtlFillSlider(QSlider):
         ratio = (rect.right() - float(x)) / max(1.0, rect.width())
         ratio = max(0.0, min(1.0, ratio))
         return self.minimum() + round(ratio * (self.maximum() - self.minimum()))
+
+    def _ancestor_scroll_area(self):
+        parent = self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                return parent
+            parent = parent.parentWidget()
+        return None
+
+    def _forward_wheel_to_scroll_area(self, event):
+        scroll_area = self._ancestor_scroll_area()
+        if not scroll_area:
+            return False
+        bar = scroll_area.verticalScrollBar()
+        pixel_delta = event.pixelDelta()
+        angle_delta = event.angleDelta()
+        if not pixel_delta.isNull() and pixel_delta.y():
+            delta = pixel_delta.y()
+        elif angle_delta.y():
+            delta = (angle_delta.y() / 120.0) * max(24, bar.singleStep() * 3)
+        else:
+            return False
+        bar.setValue(bar.value() - int(delta))
+        event.accept()
+        return True
+
+    def event(self, event):
+        if event.type() == QEvent.Type.Wheel and self._forward_wheel_to_scroll_area(event):
+            return True
+        return super().event(event)
+
+    def wheelEvent(self, event):
+        if not self._forward_wheel_to_scroll_area(event):
+            event.ignore()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():

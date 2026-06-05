@@ -1082,7 +1082,7 @@ class SettingsPage(QWidget):
         self.provider_combo.setStyleSheet(COMBOBOX_CSS)
         self.provider_combo.currentTextChanged.connect(self.on_provider_change)
         
-        self.model_combo = NoScrollComboBox()
+        self.model_combo = SearchableModelComboBox()
         self.model_combo.setStyleSheet(COMBOBOX_CSS)
         
         self.api_key_edit = MaskedSecretLineEdit()
@@ -1221,6 +1221,34 @@ class SettingsPage(QWidget):
         self.tts_voice_cb.setStyleSheet(CHECKBOX_CSS)
         self.tts_cb.stateChanged.connect(lambda state: self.tts_voice_cb.setChecked(True) if state == 2 else None)
 
+        self.tts_voice_combo = NoScrollComboBox()
+        self.tts_voice_combo.setStyleSheet(COMBOBOX_CSS)
+        self._populate_tts_voice_combo()
+        self.tts_volume_control, self.tts_volume_slider, self.tts_volume_lbl = self._make_labeled_slider(
+            0, 100, self.core.settings.get("tts_volume", 100), lambda value: f"{value}%"
+        )
+
+        self.voice_sensitivity_control, self.voice_sensitivity_slider, self.voice_sensitivity_lbl = self._make_labeled_slider(
+            1, 100, self.core.settings.get("voice_sensitivity", 70), lambda value: f"{value}%"
+        )
+        pause_value = int(round(float(self.core.settings.get("voice_pause_threshold", 0.8)) * 10))
+        self.voice_pause_control, self.voice_pause_slider, self.voice_pause_lbl = self._make_labeled_slider(
+            3, 50, pause_value, lambda value: f"{value / 10:.1f} שניות"
+        )
+        self.voice_timeout_control, self.voice_timeout_slider, self.voice_timeout_lbl = self._make_labeled_slider(
+            1, 30, self.core.settings.get("voice_listen_timeout", 6), lambda value: f"{value} שניות"
+        )
+        ambient_value = int(round(float(self.core.settings.get("voice_ambient_noise_duration", 0.0)) * 10))
+        self.voice_ambient_control, self.voice_ambient_slider, self.voice_ambient_lbl = self._make_labeled_slider(
+            0, 30, ambient_value, lambda value: "כבוי" if value <= 0 else f"{value / 10:.1f} שניות"
+        )
+        self.voice_dynamic_energy_cb = SmartiCheckBox("התאמת רגישות אוטומטית לרעש רקע")
+        self.voice_dynamic_energy_cb.setChecked(bool(self.core.settings.get("voice_dynamic_energy_threshold", False)))
+        self.voice_dynamic_energy_cb.setStyleSheet(CHECKBOX_CSS)
+        self.voice_beep_cb = SmartiCheckBox("צפצוף בתחילת וסיום האזנה")
+        self.voice_beep_cb.setChecked(bool(self.core.settings.get("voice_beep_enabled", True)))
+        self.voice_beep_cb.setStyleSheet(CHECKBOX_CSS)
+
         self.insecure_ssl_cb = SmartiCheckBox("אפשר תאימות SSL לכלים חיצוניים (פחות בטוח)")
         self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", True))
         self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
@@ -1257,11 +1285,56 @@ class SettingsPage(QWidget):
             background-color: {ACCENT_TINT};
             color: {TEXT_COLOR}; font-weight: 700; font-size: 13px;
             border: none;
-            border-radius: 18px; padding: 7px 11px;
+            border-radius: 999px; padding: 7px 12px;
         """)
         self.loops_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loops_val_lbl.setProperty("smartiValuePill", True)
         self.loops_val_lbl.setMinimumSize(96, 30)
         self.loops_slider.valueChanged.connect(lambda val: self.loops_val_lbl.setText(self._loop_label_text(val)))
+
+    def _value_pill_css(self):
+        return f"""
+            background-color: {ACCENT_TINT};
+            color: {TEXT_COLOR}; font-weight: 700; font-size: 13px;
+            border: none;
+            border-radius: 999px; padding: 7px 12px;
+        """
+
+    def _make_labeled_slider(self, minimum, maximum, value, formatter):
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        slider = RtlFillSlider(Qt.Orientation.Horizontal)
+        slider.setRange(int(minimum), int(maximum))
+        try:
+            value = int(round(float(value)))
+        except Exception:
+            value = int(minimum)
+        slider.setValue(max(int(minimum), min(int(maximum), value)))
+        slider.setStyleSheet(SLIDER_CSS)
+        label = QLabel(formatter(slider.value()))
+        label.setProperty("smartiValuePill", True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setMinimumSize(104, 30)
+        label.setStyleSheet(self._value_pill_css())
+        slider.valueChanged.connect(lambda val: label.setText(formatter(val)))
+        layout.addWidget(slider, 1)
+        layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        return container, slider, label
+
+    def _populate_tts_voice_combo(self):
+        self.tts_voice_combo.clear()
+        voices = list_tts_voices()
+        for voice in voices:
+            label = voice.get("name") or voice.get("id") or "Voice"
+            self.tts_voice_combo.addItem(label, voice.get("id", ""))
+        if not voices:
+            self.tts_voice_combo.addItem("Google TTS לא זמין", "co.il")
+        selected_voice = str(self.core.settings.get("tts_voice_id", "co.il") or "co.il")
+        index = self.tts_voice_combo.findData(selected_voice)
+        self.tts_voice_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _loop_label_text(self, val):
         return "ללא הגבלה" if val > 30 else f"{val} סבבים"
@@ -1389,7 +1462,7 @@ class SettingsPage(QWidget):
         self._add_field("מפתח גישה לספק המודל", self.api_key_row, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
         ai.addWidget(self.api_key_status)
         ai.addWidget(self.api_key_help_hint)
-        self._add_field("מודל", self.model_combo, ai, "בחר את המודל שיריץ את סמארטי. מודל חזק יותר בדרך כלל מדויק יותר, אך עשוי לעלות יותר.")
+        self._add_field("מודל", self.model_combo, ai, "אפשר להקליד חיפוש חופשי כמו 70b llama instruct; הסינון סלחני לסדר מילים, מקפים ושמות ספקים.")
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי רק כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.")
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
         ai.addWidget(self.tavily_key_help_hint)
@@ -1444,6 +1517,15 @@ class SettingsPage(QWidget):
         self._add_section_header("קול", voice)
         self._add_checkbox(self.tts_cb, voice, "כאשר האפשרות פעילה, סמארטי יקריא בקול את כל התשובות.")
         self._add_checkbox(self.tts_voice_cb, voice, "כאשר האפשרות פעילה, הקריאה הקולית תופעל בעיקר לאחר פנייה קולית מצד המשתמש.")
+        self._add_field("קול הקראה", self.tts_voice_combo, voice, "בחירת נקודת קול של Google TTS לעברית.")
+        self._add_field("עוצמת הקראה", self.tts_volume_control, voice, "שולט בעוצמת השמע בזמן ההקראה.")
+        self._add_section_header("האזנה", voice)
+        self._add_field("רגישות מיקרופון", self.voice_sensitivity_control, voice, "ערך גבוה מזהה דיבור חלש מהר יותר; בסביבה רועשת כדאי להוריד מעט.")
+        self._add_field("סיום אחרי שקט", self.voice_pause_control, voice, "כמה זמן של שקט יסיים את ההאזנה וישלח את התמלול לעיבוד.")
+        self._add_field("המתנה לתחילת דיבור", self.voice_timeout_control, voice, "כמה זמן לחכות לדיבור אחרי הפעלת ההאזנה לפני ביטול.")
+        self._add_field("כיול רעש רקע לפני האזנה", self.voice_ambient_control, voice, "0 מתחיל הכי מהר. הגדלה משפרת דיוק בסביבה רועשת אבל מוסיפה השהיה.")
+        self._add_checkbox(self.voice_dynamic_energy_cb, voice, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.")
+        self._add_checkbox(self.voice_beep_cb, voice, "כבוי כברירת מחדל כדי שההאזנה תתחיל מהר ככל האפשר.")
         voice.addStretch()
 
         self._add_internal_back(advanced, "מתקדם")
@@ -1536,8 +1618,11 @@ class SettingsPage(QWidget):
             self.api_key_edit.set_secret(saved_key)
             self._validated_api_keys.add((text, sanitize_secret_value(saved_key)))
             self.api_key_status.setText(f"מפתח שמור: {mask_secret_value(saved_key)}" if saved_key else "")
-        self.model_combo.clear()
-        self.model_combo.addItem("טוען מודלים...")
+        if hasattr(self.model_combo, "set_loading_text"):
+            self.model_combo.set_loading_text("טוען מודלים...")
+        else:
+            self.model_combo.clear()
+            self.model_combo.addItem("טוען מודלים...")
         self.fetch_worker = FetchModelsWorker(
             text,
             self.api_key_edit.secret(),
@@ -1557,14 +1642,21 @@ class SettingsPage(QWidget):
     def populate_models(self, models, provider):
         previous_suppress = getattr(self, "_suppress_autosave", False)
         self._suppress_autosave = True
-        self.model_combo.clear()
         if models:
-            self.model_combo.addItems(models)
             saved_model = self.core.settings.get(f"selected_{provider}_model", "")
-            if saved_model in models: self.model_combo.setCurrentText(saved_model)
+            if hasattr(self.model_combo, "set_models"):
+                self.model_combo.set_models(models, saved_model)
+            else:
+                self.model_combo.clear()
+                self.model_combo.addItems(models)
+                if saved_model in models: self.model_combo.setCurrentText(saved_model)
         else:
             fallback = self.core.settings.get(f"selected_{provider}_model", "") or provider_default_model(provider)
-            self.model_combo.addItem(fallback)
+            if hasattr(self.model_combo, "set_models"):
+                self.model_combo.set_models([fallback], fallback)
+            else:
+                self.model_combo.clear()
+                self.model_combo.addItem(fallback)
         self._suppress_autosave = previous_suppress
         self._schedule_autosave()
 
@@ -1581,10 +1673,14 @@ class SettingsPage(QWidget):
         return
 
     def _register_autosave_handlers(self):
-        combos = [self.provider_combo, self.model_combo]
+        combos = [self.provider_combo, self.tts_voice_combo]
         combos.extend(self.policy_combos.values())
         for combo in combos:
             combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
+        if hasattr(self.model_combo, "modelCommitted"):
+            self.model_combo.modelCommitted.connect(lambda _=None: self._schedule_autosave())
+        else:
+            self.model_combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
         self.theme_combo.currentIndexChanged.connect(self.on_theme_mode_change)
         self.autonomy_combo.currentIndexChanged.connect(self.on_autonomy_profile_change)
         self.permission_combo.currentIndexChanged.connect(self.on_permission_profile_change)
@@ -1595,7 +1691,8 @@ class SettingsPage(QWidget):
             self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
-            self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb
+            self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb,
+            self.voice_dynamic_energy_cb, self.voice_beep_cb
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
 
@@ -1617,6 +1714,12 @@ class SettingsPage(QWidget):
         self.mcp_allowed_dirs.pathsChanged.connect(self._schedule_autosave)
         self.sandbox_root_picker.pathsChanged.connect(self._schedule_autosave)
         self.loops_slider.valueChanged.connect(lambda _=None: self._schedule_autosave())
+        for slider in [
+            self.tts_volume_slider, self.voice_sensitivity_slider,
+            self.voice_pause_slider, self.voice_timeout_slider,
+            self.voice_ambient_slider
+        ]:
+            slider.valueChanged.connect(lambda _=None: self._schedule_autosave())
 
     def _schedule_autosave(self):
         if getattr(self, "_suppress_autosave", False):
@@ -1729,7 +1832,8 @@ class SettingsPage(QWidget):
             if label.property("smartiHighContrastLink"):
                 apply_high_contrast_link_label(label)
                 continue
-            if label is getattr(self, "loops_val_lbl", None):
+            if label.property("smartiValuePill"):
+                label.setStyleSheet(self._value_pill_css())
                 continue
             style = label.styleSheet() or ""
             if "color:" not in style:
@@ -1747,6 +1851,8 @@ class SettingsPage(QWidget):
                 label.setStyleSheet(muted_label_css(size))
         for combo in self.findChildren(NoScrollComboBox):
             combo.setStyleSheet(COMBOBOX_CSS)
+        for model_picker in self.findChildren(SearchableModelComboBox):
+            model_picker.apply_theme()
         for segment in self.findChildren(SegmentedControl):
             segment.apply_theme()
         for edit in self.findChildren(QLineEdit):
@@ -1769,15 +1875,11 @@ class SettingsPage(QWidget):
             toggle.update()
         for card in self.findChildren(SettingsNavCard):
             card.apply_theme()
-        if hasattr(self, "loops_slider"):
-            self.loops_slider.setStyleSheet(SLIDER_CSS)
-        if hasattr(self, "loops_val_lbl"):
-            self.loops_val_lbl.setStyleSheet(f"""
-                background-color: {ACCENT_TINT};
-                color: {TEXT_COLOR}; font-weight: 700; font-size: 13px;
-                border: none;
-                border-radius: 18px; padding: 7px 11px;
-            """)
+        for slider in self.findChildren(RtlFillSlider):
+            slider.setStyleSheet(SLIDER_CSS)
+        for label in self.findChildren(QLabel):
+            if label.property("smartiValuePill"):
+                label.setStyleSheet(self._value_pill_css())
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
         if hasattr(self, "api_key_help_link"):
@@ -1827,7 +1929,7 @@ class SettingsPage(QWidget):
             return
         before = copy.deepcopy(self.core.settings)
         provider = self.provider_combo.currentText()
-        selected_model = self.model_combo.currentText()
+        selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
         self.core.settings["api_mode"] = provider
         self.core.settings["autonomy_mode"] = self._autonomy_profile_key()
         self.core.settings.setdefault("ui_preferences", {})["theme_mode"] = self._theme_mode_key()
@@ -1867,6 +1969,14 @@ class SettingsPage(QWidget):
                 self.core.settings[key] = default
         self.core.settings["read_aloud_all"] = self.tts_cb.isChecked()
         self.core.settings["read_aloud_voice_only"] = self.tts_voice_cb.isChecked()
+        self.core.settings["tts_voice_id"] = self.tts_voice_combo.currentData() or "co.il"
+        self.core.settings["tts_volume"] = int(self.tts_volume_slider.value())
+        self.core.settings["voice_sensitivity"] = int(self.voice_sensitivity_slider.value())
+        self.core.settings["voice_pause_threshold"] = round(self.voice_pause_slider.value() / 10.0, 1)
+        self.core.settings["voice_listen_timeout"] = int(self.voice_timeout_slider.value())
+        self.core.settings["voice_ambient_noise_duration"] = round(self.voice_ambient_slider.value() / 10.0, 1)
+        self.core.settings["voice_dynamic_energy_threshold"] = self.voice_dynamic_energy_cb.isChecked()
+        self.core.settings["voice_beep_enabled"] = self.voice_beep_cb.isChecked()
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
         self.core.settings["enable_browser_automation"] = self.browser_auto_cb.isChecked()
