@@ -38,12 +38,13 @@ $BuildVenv = Join-Path $WorkRoot ".venv-build"
 $RuntimeDir = Join-Path $BuildDir "runtime"
 $DownloadCacheDir = Join-Path $WorkRoot ".download-cache"
 $PyInstallerWorkDir = Join-Path $WorkRoot "pyinstaller-work"
+$InstallerRelativePathBudget = 190
 
 function Get-SafeVersion {
     param([string]$Raw)
     if (-not $Raw) { return "dev" }
     $value = $Raw.Trim()
-    if ($value.StartsWith("v")) { $value = $value.Substring(1) }
+    if ($value.StartsWith("v", [System.StringComparison]::OrdinalIgnoreCase)) { $value = $value.Substring(1) }
     $value = $value -replace "[^A-Za-z0-9_.-]+", "-"
     if (-not $value) { return "dev" }
     return $value
@@ -106,6 +107,54 @@ function Invoke-Checked {
     }
 }
 
+function Get-RelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootUri = [System.Uri]::new($rootFull)
+    $pathUri = [System.Uri]::new($pathFull)
+    return [System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace('/', '\')
+}
+
+function Assert-ReleaseLayout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string[]]$RequiredRelativePaths
+    )
+    foreach ($relative in $RequiredRelativePaths) {
+        $path = Join-Path $Root $relative
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Release layout is missing required file or directory: $relative"
+        }
+    }
+}
+
+function Assert-InstallerPathBudget {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [int]$MaxRelativeLength = 190
+    )
+    $longest = Get-ChildItem -LiteralPath $Root -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $relative = Get-RelativePath -Root $Root -Path $_.FullName
+            [pscustomobject]@{ Length = $relative.Length; RelativePath = $relative }
+        } |
+        Sort-Object Length -Descending |
+        Select-Object -First 10
+    $tooLong = @($longest | Where-Object { $_.Length -gt $MaxRelativeLength })
+    if ($tooLong.Count -gt 0) {
+        $details = ($tooLong | ForEach-Object { "$($_.Length): $($_.RelativePath)" }) -join [Environment]::NewLine
+        throw "Installer path budget exceeded. Prune packaging-only runtime files or shorten paths before building the installer. Limit: $MaxRelativeLength relative characters.$([Environment]::NewLine)$details"
+    }
+    $top = $longest | Select-Object -First 1
+    if ($top) {
+        Write-Host "Installer path budget OK: longest relative path is $($top.Length)/$MaxRelativeLength characters."
+    }
+}
+
 $ReleaseVersion = Resolve-ReleaseVersion
 Write-Host "Building SmartiAI release $ReleaseVersion"
 
@@ -128,6 +177,7 @@ if (-not (Test-Path (Join-Path $BuildVenv "Scripts\python.exe"))) {
 $VenvPython = Join-Path $BuildVenv "Scripts\python.exe"
 Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
 Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements.txt"), "-r", (Join-Path $RepoRoot "requirements-build.txt"))
+Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "check")
 
 if (-not $SkipRuntime) {
     $prepareArgs = @(
@@ -185,6 +235,19 @@ $manifest = [ordered]@{
     npxExe = "runtime\node\npx.cmd"
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $DistDir "release_manifest.json") -Encoding UTF8
+
+Assert-ReleaseLayout -Root $DistDir -RequiredRelativePaths @(
+    "SmartiAI.exe",
+    "assets\smarti.ico",
+    "LICENSE",
+    "README.md",
+    "release_manifest.json",
+    "runtime\runtime_manifest.json",
+    "runtime\python\python.exe",
+    "runtime\node\node.exe",
+    "runtime\node\npx.cmd"
+)
+Assert-InstallerPathBudget -Root $DistDir -MaxRelativeLength $InstallerRelativePathBudget
 
 $zipPath = Join-Path $ReleaseDir "SmartiAI-Agent-for-Windows-$ReleaseVersion-win-x64-portable.zip"
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }

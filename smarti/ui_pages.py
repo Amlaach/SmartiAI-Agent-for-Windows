@@ -1163,7 +1163,7 @@ class SettingsPage(QWidget):
         self.check_updates_btn = QPushButton("בדוק עדכונים עכשיו")
         self.check_updates_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.check_updates_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        set_themed_button_icon(self.check_updates_btn, ("update_icon", "download_update_icon", "reset_icon"), self.check_updates_btn.text(), 18, clear_text=False)
+        set_themed_button_icon(self.check_updates_btn, ("check_updates_icon",), self.check_updates_btn.text(), 18, clear_text=False)
         self.check_updates_btn.clicked.connect(self.check_updates_now)
         self.update_status_lbl = QLabel(self._update_status_text())
         self.update_status_lbl.setWordWrap(True)

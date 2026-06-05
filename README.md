@@ -6,6 +6,8 @@ SmartiAI Agent for Windows is a desktop AI agent built for practical work on a W
 
 The goal is simple: give the user a capable assistant that can help operate the computer while staying transparent, configurable, and under the user's control.
 
+Current release target: `V0.68.0`.
+
 ## What Smarti Can Do
 
 - Understand a request, break it into steps, choose the right tools, run the work, and show intermediate action steps.
@@ -97,12 +99,16 @@ pythonw smarti_core.pyw
 The source tree stays clean in Git. Build artifacts and downloaded runtimes are ignored; only the repeatable release recipe is tracked.
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.0.0
+.\scripts\build_release.ps1 -Version 0.68.0
 ```
 
-The build creates a PyInstaller `SmartiAI.exe` with the `assets\smarti.ico` application icon, copies the required assets, and adds private runtimes under `runtime\python` and `runtime\node`. Packaged Smarti uses those private runtimes for custom Python tools, MCP packages, and Skill requirement installs. Source runs continue to use Python and Node from the developer machine.
+The build creates a PyInstaller `SmartiAI.exe` with the `assets\smarti.ico` application icon, copies the required assets, and adds private runtimes under `runtime\python` and `runtime\node`. Packaged Smarti uses those private runtimes for custom Python tools, MCP packages, and Skill requirement installs. Source runs continue to use Python and Node from the developer machine. The release script also runs `pip check` for the build environment and private Python runtime, verifies the expected release layout, and checks installer path lengths before packaging.
 
-Outputs are written to `release\`: a portable ZIP is always created, and a setup EXE is created when Inno Setup 6 is installed. The installer is per-user by default (`%LOCALAPPDATA%\Programs\SmartiAI`) so Smarti can keep installing dynamic tools without administrator rights.
+Outputs are written to `release\`: a portable ZIP is always created, and a setup EXE is created when Inno Setup 6 is installed. The installer is per-user by default (`%LOCALAPPDATA%\SmartiAI`) so Smarti can keep installing dynamic tools without administrator rights. Existing installs may keep using their previous app directory during silent upgrades.
+
+## Automatic Updates
+
+Smarti checks GitHub Releases for the latest release, compares the tag against the app version, and downloads the attached Windows setup EXE when a newer version is available. For `V0.68.0`, publish a GitHub release tagged `V0.68.0` or `0.68.0`, attach `SmartiAI-Agent-for-Windows-0.68.0-Setup.exe`, and also attach `SmartiAI-Agent-for-Windows-0.68.0-win-x64-portable.zip` for manual portable installs.
 
 ## Optional Capabilities
 
@@ -147,6 +153,8 @@ This project is distributed under the license included in `LICENSE`.
 SmartiAI Agent for Windows הוא סוכן AI שולחני שנועד לעבודה מעשית על מחשב Windows. הוא לא רק חלון צ'אט: Smarti יכול לתכנן משימות, להשתמש בכלים מקומיים, לבדוק קבצים, לעבוד עם האינטרנט, לבצע אוטומציה בדפדפן ובשולחן העבודה, לנהל אימייל, לזכור הקשר שימושי ולבקש אישור לפני פעולות רגישות.
 
 המטרה פשוטה: לתת למשתמש עוזר חזק שיכול לעזור להפעיל את המחשב, תוך שקיפות, אפשרות הגדרה ושליטה מלאה של המשתמש.
+
+יעד הגרסה הנוכחי: `V0.68.0`.
 
 ## מה Smarti יודע לעשות
 
@@ -239,12 +247,16 @@ pythonw smarti_core.pyw
 עץ המקור נשאר נקי ב-Git. קבצי build, חבילות release וסביבות runtime שהורדו מוחרגים, ורק מתכון הבנייה נשמר במאגר.
 
 ```powershell
-.\scripts\build_release.ps1 -Version 1.0.0
+.\scripts\build_release.ps1 -Version 0.68.0
 ```
 
-הבנייה יוצרת `SmartiAI.exe` עם PyInstaller ועם אייקון היישום `assets\smarti.ico`, מעתיקה את נכסי הממשק, ומוסיפה runtimes פרטיים תחת `runtime\python` ו-`runtime\node`. גרסה ארוזה של Smarti משתמשת בהם עבור כלי Python דינמיים, חבילות MCP והתקנת דרישות של Skills. בהרצה מהמקור Smarti ממשיך להשתמש ב-Python וב-Node שמותקנים במחשב הפיתוח.
+הבנייה יוצרת `SmartiAI.exe` עם PyInstaller ועם אייקון היישום `assets\smarti.ico`, מעתיקה את נכסי הממשק, ומוסיפה runtimes פרטיים תחת `runtime\python` ו-`runtime\node`. גרסה ארוזה של Smarti משתמשת בהם עבור כלי Python דינמיים, חבילות MCP והתקנת דרישות של Skills. בהרצה מהמקור Smarti ממשיך להשתמש ב-Python וב-Node שמותקנים במחשב הפיתוח. סקריפט ההפצה גם מריץ `pip check` לסביבת הבנייה ול-Python הפרטי, מאמת את מבנה חבילת ההפצה, ובודק אורכי נתיבים לפני יצירת החבילות.
 
-התוצרים נכתבים אל `release\`: תמיד נוצר ZIP נייד, ונוצר גם קובץ התקנה כאשר Inno Setup 6 מותקן. ברירת המחדל של ההתקנה היא פר-משתמש (`%LOCALAPPDATA%\Programs\SmartiAI`), כדי ש-Smarti יוכל להמשיך להתקין כלים דינמיים בלי הרשאות מנהל.
+התוצרים נכתבים אל `release\`: תמיד נוצר ZIP נייד, ונוצר גם קובץ התקנה כאשר Inno Setup 6 מותקן. ברירת המחדל של ההתקנה היא פר-משתמש (`%LOCALAPPDATA%\SmartiAI`), כדי ש-Smarti יוכל להמשיך להתקין כלים דינמיים בלי הרשאות מנהל. התקנות קיימות עשויות להמשיך להשתמש בתיקיית ההתקנה הקודמת בזמן עדכון שקט.
+
+## עדכונים אוטומטיים
+
+Smarti בודק את GitHub Releases, משווה את תגית הגרסה לגרסת האפליקציה, ומוריד את קובץ ה-Setup של Windows כאשר קיימת גרסה חדשה יותר. עבור `V0.68.0`, יש לפרסם GitHub Release עם תגית `V0.68.0` או `0.68.0`, לצרף את `SmartiAI-Agent-for-Windows-0.68.0-Setup.exe`, ולצרף גם את `SmartiAI-Agent-for-Windows-0.68.0-win-x64-portable.zip` להתקנה ידנית ניידת.
 
 ## יכולות אופציונליות
 

@@ -50,6 +50,17 @@ function Invoke-Download {
     }
 }
 
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 function Reset-Directory {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (Test-Path $Path) {
@@ -104,23 +115,53 @@ function Copy-SiteCustomize {
     Copy-Item -LiteralPath $source -Destination (Join-Path $targetDir "sitecustomize.py") -Force
 }
 
+function Remove-PathIfExists {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+        Write-Host "Pruned packaging-only runtime path: $Path"
+    }
+}
+
+function Optimize-PythonRuntimeForPackaging {
+    param([Parameter(Mandatory = $true)][string]$PythonDir)
+    $sitePackages = Join-Path $PythonDir "Lib\site-packages"
+    if (-not (Test-Path -LiteralPath $sitePackages)) { return }
+
+    $pruneRelativeDirs = @(
+        "litellm\proxy\guardrails\guardrail_hooks\litellm_content_filter\guardrail_benchmarks",
+        "litellm\proxy\_experimental\out"
+    )
+    foreach ($relative in $pruneRelativeDirs) {
+        Remove-PathIfExists -Path (Join-Path $sitePackages $relative)
+    }
+
+    Get-ChildItem -LiteralPath $sitePackages -Directory -Filter "__pycache__" -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem -LiteralPath $sitePackages -File -Filter "*.pyc" -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem -LiteralPath $sitePackages -File -Filter "*.pyo" -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
 function Install-PythonPackages {
     param(
         [Parameter(Mandatory = $true)][string]$PythonExe,
         [Parameter(Mandatory = $true)]$Config
     )
     $requirements = Join-Path $RepoRoot "requirements.txt"
-    & $PythonExe -m pip install --upgrade pip setuptools wheel
-    & $PythonExe -m pip install -r $requirements
+    Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "install", "--upgrade", "--no-cache-dir", "pip", "setuptools", "wheel")
+    Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "install", "--no-cache-dir", "-r", $requirements)
     $extra = @()
     if ($Config.PSObject.Properties.Name -contains "extraPythonPackages") {
         $extra = @($Config.extraPythonPackages)
     }
     foreach ($package in $extra) {
         if ("$package".Trim()) {
-            & $PythonExe -m pip install "$package"
+            Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "install", "--no-cache-dir", "$package")
         }
     }
+    Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "check")
 }
 
 function Prepare-PythonRuntime {
@@ -151,15 +192,16 @@ function Prepare-PythonRuntime {
         $getPipSha = Get-ConfigValue $Config.getPip "sha256"
         $getPipPath = Join-Path $CacheDir "get-pip.py"
         Invoke-Download -Url $getPipUrl -OutFile $getPipPath -Sha256 $getPipSha
-        & $pythonExe $getPipPath --no-warn-script-location
+        Invoke-Checked -FilePath $pythonExe -Arguments @($getPipPath, "--no-warn-script-location")
     }
 
     Copy-SiteCustomize -PythonDir $pythonDir
     if (-not $SkipRequirements) {
         Install-PythonPackages -PythonExe $pythonExe -Config $Config
     }
-    & $pythonExe --version
-    & $pythonExe -m pip --version
+    Optimize-PythonRuntimeForPackaging -PythonDir $pythonDir
+    Invoke-Checked -FilePath $pythonExe -Arguments @("--version")
+    Invoke-Checked -FilePath $pythonExe -Arguments @("-m", "pip", "--version")
 }
 
 function Prepare-NodeRuntime {
@@ -185,8 +227,8 @@ function Prepare-NodeRuntime {
             throw "Could not locate node.exe in extracted Node archive."
         }
     }
-    & (Join-Path $nodeDir "node.exe") --version
-    & (Join-Path $nodeDir "npx.cmd") --version
+    Invoke-Checked -FilePath (Join-Path $nodeDir "node.exe") -Arguments @("--version")
+    Invoke-Checked -FilePath (Join-Path $nodeDir "npx.cmd") -Arguments @("--version")
 }
 
 if (-not (Test-Path $ConfigPath)) { throw "Missing runtime config: $ConfigPath" }

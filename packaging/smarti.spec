@@ -28,6 +28,7 @@ for package in (
     "litellm",
     "markdown",
     "PIL",
+    "pyaudio",
     "PyPDF2",
     "pyautogui",
     "pygame",
