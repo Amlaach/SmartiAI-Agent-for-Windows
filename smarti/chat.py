@@ -7,6 +7,7 @@ from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
+from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
@@ -1832,6 +1833,123 @@ class ChatHistoryPage(QWidget):
                 self.main_window.load_active_chat_session()
             self.load_sessions()
 
+class UpdateDialog(QDialog):
+    install_requested = pyqtSignal()
+
+    def __init__(self, update_info, parent=None):
+        super().__init__(parent)
+        self.update_info = UpdateInfo.from_dict(update_info)
+        self.setWindowTitle("עדכון חדש לסמארטי")
+        self.setModal(True)
+        self.setMinimumSize(420, 580)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel(f"עדכון חדש זמין: {self.update_info.version}")
+        title.setWordWrap(True)
+        title.setStyleSheet(page_title_css(20))
+        layout.addWidget(title)
+
+        meta = QLabel(f"גרסה נוכחית: {self.update_info.current_version}")
+        if self.update_info.asset_size:
+            meta.setText(f"{meta.text()} | גודל הורדה: {human_size(self.update_info.asset_size)}")
+        meta.setWordWrap(True)
+        meta.setStyleSheet(muted_label_css(12))
+        layout.addWidget(meta)
+
+        notes_title = QLabel("מה חדש")
+        notes_title.setStyleSheet(section_title_css(15))
+        layout.addWidget(notes_title)
+
+        self.notes_browser = QTextBrowser()
+        self.notes_browser.setOpenExternalLinks(True)
+        self.notes_browser.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.notes_browser.setStyleSheet(
+            f"QTextBrowser {{ background: {PANEL_ELEVATED_COLOR}; color: {TEXT_COLOR}; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 8px; padding: 12px; "
+            "font-size: 13px; }}"
+            f"QTextBrowser viewport {{ background: {PANEL_ELEVATED_COLOR}; }}"
+            f"{SCROLLBAR_CSS}"
+        )
+        notes = self.update_info.release_notes.strip() or "לא צורפו הערות שחרור לגרסה הזו."
+        notes_html = _render_markdown_html(notes, ACCENT_COLOR, style_blocks=True, clickable_links=True)
+        self.notes_browser.setHtml(
+            "<html><body dir='auto' style=\"font-family:'Segoe UI'; font-size:13px;\">"
+            f"{notes_html}"
+            "</body></html>"
+        )
+        layout.addWidget(self.notes_browser, 1)
+
+        self.status_lbl = QLabel("")
+        self.status_lbl.setWordWrap(True)
+        self.status_lbl.setStyleSheet(muted_label_css(12))
+        layout.addWidget(self.status_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar {{ background: {PANEL_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 8px; height: 18px; text-align: center; }}"
+            f"QProgressBar::chunk {{ background: {ACCENT_COLOR}; border-radius: 8px; }}"
+        )
+        layout.addWidget(self.progress_bar)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.install_btn = QPushButton("הורד והתקן")
+        self.install_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.install_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        self.install_btn.clicked.connect(self.install_requested.emit)
+        self.close_btn = QPushButton("אחר כך")
+        self.close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.close_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.close_btn.clicked.connect(self.reject)
+        row.addWidget(self.close_btn)
+        row.addWidget(self.install_btn)
+        layout.addLayout(row)
+
+        if not self.update_info.asset_url:
+            self.install_btn.setEnabled(False)
+            self.status_lbl.setText("לא נמצא קובץ התקנה מסוג Setup.exe בפוסט השחרור בגיטהאב.")
+
+    def set_downloading(self):
+        self.install_btn.setEnabled(False)
+        self.close_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.status_lbl.setText("מוריד את העדכון...")
+
+    def set_progress(self, received, total):
+        received = int(received or 0)
+        total = int(total or 0)
+        if total > 0:
+            value = max(0, min(100, int(received * 100 / total)))
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(value)
+            self.status_lbl.setText(f"מוריד את העדכון... {human_size(received)} מתוך {human_size(total)}")
+        else:
+            self.progress_bar.setRange(0, 0)
+            self.status_lbl.setText(f"מוריד את העדכון... {human_size(received)}")
+
+    def set_installing(self):
+        self.progress_bar.setRange(0, 0)
+        self.status_lbl.setText("ההתקנה מתחילה עכשיו. סמארטי ייסגר, יעדכן את עצמו וייפתח מחדש.")
+
+    def set_error(self, message):
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.install_btn.setEnabled(bool(self.update_info.asset_url))
+        self.close_btn.setEnabled(True)
+        self.status_lbl.setText(f"שגיאת עדכון: {message}")
+
+
 class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
@@ -1875,6 +1993,11 @@ class ChatWindow(QMainWindow):
         self._quit_requested = False
         self._tray_close_hint_shown = False
         self._suppress_menu_open_once = False
+        self.available_update = None
+        self.update_check_worker = None
+        self.update_download_worker = None
+        self._update_dialog = None
+        self._update_check_source = None
         self.pending_attachments = []
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
@@ -1948,6 +2071,7 @@ class ChatWindow(QMainWindow):
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
         self.load_active_chat_session()
         QTimer.singleShot(1200, self.core.resume_background_tasks)
+        QTimer.singleShot(2600, self.maybe_check_for_updates)
         
         app = QApplication.instance()
         if app:
@@ -2058,6 +2182,8 @@ class ChatWindow(QMainWindow):
             socket.disconnectFromServer()
             if command == "voice":
                 self.open_new_chat_from_activation(start_listening=True)
+            elif command == "quit_for_update":
+                self.quit_for_update()
             else:
                 self.open_new_chat_from_activation(start_listening=False)
 
@@ -2068,6 +2194,177 @@ class ChatWindow(QMainWindow):
         self.bring_to_front()
         if start_listening and not self.agent_running:
             QTimer.singleShot(150, self.start_voice)
+
+    def _utc_now_iso(self):
+        return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+    def _auto_update_check_due(self):
+        if not bool(self.core.settings.get("updates_auto_check", True)):
+            return False
+        try:
+            interval_hours = max(1, int(self.core.settings.get("updates_check_interval_hours", 12) or 12))
+        except Exception:
+            interval_hours = 12
+        last_value = str(self.core.settings.get("updates_last_checked_at", "") or "").strip().replace("Z", "")
+        if not last_value:
+            return True
+        try:
+            last_dt = datetime.fromisoformat(last_value)
+            return (datetime.utcnow() - last_dt).total_seconds() >= interval_hours * 3600
+        except Exception:
+            return True
+
+    def maybe_check_for_updates(self):
+        if self._auto_update_check_due():
+            self.check_for_updates(manual=False)
+
+    def check_for_updates_manual(self, source_widget=None):
+        self.check_for_updates(manual=True, source_widget=source_widget)
+
+    def check_for_updates(self, manual=False, source_widget=None):
+        worker = getattr(self, "update_check_worker", None)
+        if worker is not None and worker.isRunning():
+            if manual:
+                if source_widget and hasattr(source_widget, "finish_update_check"):
+                    source_widget.finish_update_check("בדיקת עדכונים כבר מתבצעת.")
+                else:
+                    QMessageBox.information(self, "עדכונים", "בדיקת עדכונים כבר מתבצעת.")
+            return
+
+        self._update_check_source = source_widget
+        if source_widget and hasattr(source_widget, "begin_update_check"):
+            source_widget.begin_update_check()
+
+        worker = UpdateCheckWorker(self.core.settings, self)
+        self.update_check_worker = worker
+        worker.found.connect(lambda info: self._handle_update_found(info, manual))
+        worker.no_update.connect(lambda message: self._handle_update_not_found(message, manual))
+        worker.failed.connect(lambda message: self._handle_update_check_failed(message, manual))
+        worker.finished.connect(lambda: self._cleanup_update_check_worker(worker))
+        worker.start()
+
+    def _record_update_check(self, available_version=None):
+        try:
+            self.core.settings["updates_last_checked_at"] = self._utc_now_iso()
+            if available_version is not None:
+                self.core.settings["updates_last_available_version"] = available_version
+            self.core._save_settings()
+        except Exception:
+            pass
+
+    def _finish_update_source(self, message):
+        source = getattr(self, "_update_check_source", None)
+        self._update_check_source = None
+        if source and hasattr(source, "finish_update_check"):
+            source.finish_update_check(message)
+
+    def _cleanup_update_check_worker(self, worker):
+        if getattr(self, "update_check_worker", None) is worker:
+            self.update_check_worker = None
+        worker.deleteLater()
+
+    def _handle_update_found(self, info, manual=False):
+        self.available_update = UpdateInfo.from_dict(info)
+        self._record_update_check(self.available_update.version)
+        self._refresh_update_button()
+        self._finish_update_source(f"נמצא עדכון חדש: {self.available_update.version}")
+        if manual:
+            self.show_update_dialog(update_info=self.available_update)
+
+    def _handle_update_not_found(self, message, manual=False):
+        self.available_update = None
+        self._record_update_check("")
+        self._refresh_update_button()
+        self._finish_update_source("אין עדכון חדש.")
+        if manual:
+            QMessageBox.information(self, "עדכונים", "אין עדכון חדש. סמארטי מעודכן.")
+
+    def _handle_update_check_failed(self, message, manual=False):
+        self._record_update_check(None)
+        self._finish_update_source(f"שגיאה בבדיקת עדכונים: {message}")
+        if manual:
+            QMessageBox.warning(self, "עדכונים", f"לא הצלחתי לבדוק עדכונים:\n{message}")
+
+    def _refresh_update_button(self):
+        if not hasattr(self, "update_btn"):
+            return
+        info = getattr(self, "available_update", None)
+        self.update_btn.setVisible(bool(info))
+        if info:
+            self.update_btn.setToolTip(f"יש עדכון חדש לסמארטי: {info.version}. לחץ להורדה והתקנה.")
+            self.update_btn.raise_()
+
+    def show_update_dialog(self, _checked=False, update_info=None):
+        info = UpdateInfo.from_dict(update_info or getattr(self, "available_update", None) or {})
+        if not info.version:
+            self.check_for_updates(manual=True)
+            return
+        dialog = UpdateDialog(info, self)
+        self._update_dialog = dialog
+        dialog.install_requested.connect(lambda: self.start_update_download(info, dialog))
+        dialog.exec()
+        if self._update_dialog is dialog:
+            self._update_dialog = None
+
+    def start_update_download(self, update_info, dialog=None):
+        worker = getattr(self, "update_download_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        info = UpdateInfo.from_dict(update_info)
+        dialog = dialog or getattr(self, "_update_dialog", None)
+        if dialog:
+            dialog.set_downloading()
+        worker = UpdateDownloadWorker(info, self.core.settings, self)
+        self.update_download_worker = worker
+        if dialog:
+            worker.progress.connect(dialog.set_progress)
+        worker.downloaded.connect(lambda path: self._handle_update_downloaded(path, dialog))
+        worker.failed.connect(lambda message: self._handle_update_download_failed(message, dialog))
+        worker.finished.connect(lambda: self._cleanup_update_download_worker(worker))
+        worker.start()
+
+    def _cleanup_update_download_worker(self, worker):
+        if getattr(self, "update_download_worker", None) is worker:
+            self.update_download_worker = None
+        worker.deleteLater()
+
+    def _handle_update_downloaded(self, installer_path, dialog=None):
+        if dialog:
+            dialog.set_installing()
+        try:
+            launch_update_installer(installer_path, app_pid=os.getpid())
+        except Exception as exc:
+            if dialog:
+                dialog.set_error(str(exc))
+            return
+        QTimer.singleShot(450, self.quit_for_update)
+
+    def _handle_update_download_failed(self, message, dialog=None):
+        if dialog:
+            dialog.set_error(message)
+        else:
+            QMessageBox.warning(self, "עדכונים", f"לא הצלחתי להוריד את העדכון:\n{message}")
+
+    def quit_for_update(self):
+        self._quit_requested = True
+        try:
+            self.core.request_cancel()
+        except Exception:
+            pass
+        try:
+            self.core.stop_speaking()
+        except Exception:
+            pass
+        try:
+            self.core._close_automation_browser()
+        except Exception:
+            pass
+        self.unregister_voice_hotkey()
+        if hasattr(self, "tray_icon"):
+            self.tray_icon.hide()
+        app = QApplication.instance()
+        if app:
+            app.quit()
 
     def _chat_page_stylesheet(self):
         return f"""
@@ -2092,12 +2389,30 @@ class ChatWindow(QMainWindow):
             f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
         )
 
+    def _update_button_stylesheet(self):
+        return (
+            "QPushButton#UpdateButton {"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});"
+            f"color: {ACCENT_TEXT_COLOR}; border: 2px solid {ACCENT_TEXT_COLOR}; border-radius: 22px;"
+            "font-size: 20px; font-weight: 900; padding: 0px;"
+            "}"
+            "QPushButton#UpdateButton:hover {"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});"
+            "}"
+            f"QPushButton#UpdateButton:pressed {{ background: {ACCENT_COLOR}; }}"
+        )
+
     def _set_menu_button_icon(self):
         if not hasattr(self, "menu_btn"):
             return
         set_themed_button_icon(self.menu_btn, ("menu_icon",), "⋮", 26, clear_text=True)
         if self.menu_btn.text():
             self.menu_btn.setFont(QFont("Arial", 28, QFont.Weight.Bold))
+
+    def _set_update_button_icon(self):
+        if not hasattr(self, "update_btn"):
+            return
+        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 24, clear_text=True)
 
     def _add_menu_action(self, text, callback, *icon_names):
         action = self.menu.addAction(text)
@@ -2125,6 +2440,7 @@ class ChatWindow(QMainWindow):
 
     def refresh_themed_icons(self):
         self._set_menu_button_icon()
+        self._set_update_button_icon()
         self._set_attach_button_icon()
         self._refresh_menu_action_icons()
 
@@ -2157,6 +2473,10 @@ class ChatWindow(QMainWindow):
             self.top_bar.setStyleSheet(self._top_bar_stylesheet())
         if hasattr(self, "menu_btn"):
             self.menu_btn.setStyleSheet(self._menu_button_stylesheet())
+        if hasattr(self, "update_btn"):
+            self.update_btn.setStyleSheet(self._update_button_stylesheet())
+            apply_soft_shadow(self.update_btn, blur=26, y=7, alpha=72)
+            self._set_update_button_icon()
         if hasattr(self, "menu"):
             self.menu.setStyleSheet(menu_stylesheet())
         if hasattr(self, "title_label"):
@@ -2265,6 +2585,17 @@ class ChatWindow(QMainWindow):
         self._add_menu_action("אודות", self.show_about_page, "about_icon", "info_icon")
         self.menu_btn.clicked.connect(self.show_menu)
         self._set_menu_button_icon()
+
+        self.update_btn = QPushButton("!")
+        self.update_btn.setObjectName("UpdateButton")
+        self.update_btn.setFixedSize(44, 44)
+        self.update_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.update_btn.setToolTip("יש עדכון חדש לסמארטי. לחץ להורדה והתקנה.")
+        self.update_btn.setStyleSheet(self._update_button_stylesheet())
+        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 24, clear_text=True)
+        apply_soft_shadow(self.update_btn, blur=26, y=7, alpha=72)
+        self.update_btn.clicked.connect(self.show_update_dialog)
+        self.update_btn.setVisible(False)
         
         titles_widget = QWidget()
         self.titles_widget = titles_widget
@@ -2300,6 +2631,7 @@ class ChatWindow(QMainWindow):
             
         top_layout.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         top_layout.addWidget(titles_widget, 1)
+        top_layout.addWidget(self.update_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         top_layout.addWidget(self.menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         main_layout.addWidget(top_bar)
         

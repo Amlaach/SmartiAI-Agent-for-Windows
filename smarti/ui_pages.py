@@ -1071,6 +1071,31 @@ class SettingsPage(QWidget):
         self.api_key_help_hint.setText(instructions)
         self.api_key_help_hint.setVisible(bool(instructions and provider != "local"))
 
+    def _update_status_text(self):
+        last = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
+        available = str(self.core.settings.get("updates_last_available_version", "") or "").strip()
+        if available:
+            return f"נמצא עדכון זמין: {available}"
+        if last:
+            return f"בדיקה אחרונה: {last}"
+        return "עדיין לא בוצעה בדיקת עדכונים."
+
+    def begin_update_check(self):
+        if hasattr(self, "check_updates_btn"):
+            self.check_updates_btn.setEnabled(False)
+        if hasattr(self, "update_status_lbl"):
+            self.update_status_lbl.setText("בודק עדכונים...")
+
+    def finish_update_check(self, message):
+        if hasattr(self, "check_updates_btn"):
+            self.check_updates_btn.setEnabled(True)
+        if hasattr(self, "update_status_lbl"):
+            self.update_status_lbl.setText(str(message or self._update_status_text()))
+
+    def check_updates_now(self):
+        if hasattr(self.main_window, "check_for_updates_manual"):
+            self.main_window.check_for_updates_manual(self)
+
     def _init_widgets(self):
         self.core.ensure_provider_secret(self.core.settings.get("api_mode", "gemini"))
         for secret_key in ("tavily_api_key", "email_address", "email_password"):
@@ -1131,6 +1156,18 @@ class SettingsPage(QWidget):
         current_theme = self.core.settings.get("ui_preferences", {}).get("theme_mode", DEFAULT_THEME_MODE)
         theme_keys = [key for key, _ in self.theme_options]
         self.theme_combo.setCurrentIndex(theme_keys.index(current_theme) if current_theme in theme_keys else 0)
+
+        self.update_auto_cb = SmartiCheckBox("בדוק עדכונים אוטומטית")
+        self.update_auto_cb.setChecked(bool(self.core.settings.get("updates_auto_check", True)))
+        self.update_auto_cb.setStyleSheet(CHECKBOX_CSS)
+        self.check_updates_btn = QPushButton("בדוק עדכונים עכשיו")
+        self.check_updates_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.check_updates_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(self.check_updates_btn, ("update_icon", "download_update_icon", "reset_icon"), self.check_updates_btn.text(), 18, clear_text=False)
+        self.check_updates_btn.clicked.connect(self.check_updates_now)
+        self.update_status_lbl = QLabel(self._update_status_text())
+        self.update_status_lbl.setWordWrap(True)
+        self.update_status_lbl.setStyleSheet(muted_label_css(12))
 
         self.policy_combos = {}
         policy = self.core._normalize_policy_matrix()
@@ -1442,6 +1479,7 @@ class SettingsPage(QWidget):
         policy_page, policy_layout = self._make_scroll_page()
         tools_page, tools = self._make_scroll_page()
         voice_page, voice = self._make_scroll_page()
+        updates_page, updates = self._make_scroll_page()
         advanced_page, advanced = self._make_scroll_page()
         developer_page, developer = self._make_scroll_page()
         self.developer_page = developer_page
@@ -1453,6 +1491,7 @@ class SettingsPage(QWidget):
         home.addWidget(self._nav_card("קול ותצוגה", "אפשרויות הקראה ושימוש בקול", voice_page))
         home.addWidget(self._nav_card("מתקדם", "זמני המתנה, לולאות ותאימות חיבור", advanced_page))
         home.addWidget(self._nav_card("הגדרות מפתחים", "לוגים, Trace והרשאות נמוכות-רמה לכלים חיצוניים", developer_page))
+        home.addWidget(self._nav_card("עדכונים", "בדיקה אוטומטית וידנית מול GitHub Releases", updates_page))
         home.addSpacing(8)
         home.addWidget(self._make_reset_button())
         home.addStretch()
@@ -1527,6 +1566,12 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.voice_dynamic_energy_cb, voice, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.")
         self._add_checkbox(self.voice_beep_cb, voice, "כבוי כברירת מחדל כדי שההאזנה תתחיל מהר ככל האפשר.")
         voice.addStretch()
+
+        self._add_internal_back(updates, "עדכונים")
+        self._add_checkbox(self.update_auto_cb, updates, "כשאפשרות זו פעילה, סמארטי יבדוק ברקע אם פורסמה גרסה חדשה ב-GitHub Releases.")
+        updates.addWidget(self.update_status_lbl)
+        updates.addWidget(self.check_updates_btn)
+        updates.addStretch()
 
         self._add_internal_back(advanced, "מתקדם")
         self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.")
@@ -1689,6 +1734,7 @@ class SettingsPage(QWidget):
             self.sandbox_cb, self.sandbox_read_outside_cb, self.redact_logs_cb, self.audit_log_cb,
             self.developer_trace_cb, self.raw_shell_approval_cb, self.marketplace_approval_cb,
             self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
+            self.update_auto_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
             self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb,
@@ -1979,6 +2025,7 @@ class SettingsPage(QWidget):
         self.core.settings["voice_beep_enabled"] = self.voice_beep_cb.isChecked()
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
+        self.core.settings["updates_auto_check"] = self.update_auto_cb.isChecked()
         self.core.settings["enable_browser_automation"] = self.browser_auto_cb.isChecked()
         self.core.settings["enable_computer_control"] = self.computer_control_cb.isChecked()
         self.core.settings["privacy_redact_logs"] = self.redact_logs_cb.isChecked()

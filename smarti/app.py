@@ -8,10 +8,23 @@ from .windows_notifications import ensure_windows_notification_identity
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 INSTANCE_SERVER_NAME = "SmartiAI-Agent-for-Windows"
+_UPDATE_MUTEX_HANDLE = None
 
 def _startup_command():
     args = {str(arg or "").strip().lower() for arg in sys.argv[1:]}
+    if "--quit-for-update" in args or "/quit-for-update" in args:
+        return "quit_for_update"
     return "voice" if "--voice" in args or "/voice" in args else "show_new_chat"
+
+def _create_update_mutex():
+    global _UPDATE_MUTEX_HANDLE
+    if os.name != "nt":
+        return None
+    try:
+        _UPDATE_MUTEX_HANDLE = ctypes.windll.kernel32.CreateMutexW(None, False, INSTANCE_SERVER_NAME)
+    except Exception:
+        _UPDATE_MUTEX_HANDLE = None
+    return _UPDATE_MUTEX_HANDLE
 
 def _send_command_to_existing_instance(command):
     socket = QLocalSocket()
@@ -55,6 +68,7 @@ def main():
     if _send_command_to_existing_instance(instance_command):
         sys.exit(0)
     instance_server = _create_instance_server()
+    app._smarti_update_mutex_handle = _create_update_mutex()
 
     migrate_legacy_runtime_state()
     accepted_legal_this_run = False
