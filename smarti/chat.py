@@ -9,7 +9,7 @@ from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
-from PyQt6.QtGui import QTextDocument
+from PyQt6.QtGui import QTextDocument, QTransform
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
@@ -23,6 +23,21 @@ def _transparent_icon(size=22):
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     return QIcon(pixmap)
+
+def _rotated_themed_icon(names, degrees=0, size=18):
+    if isinstance(names, str):
+        names = (names,)
+    icon = themed_icon(*tuple(names or ()))
+    if icon.isNull() or int(degrees) % 360 == 0:
+        return icon
+    pixmap = icon.pixmap(size, size)
+    if pixmap.isNull():
+        return icon
+    rotated = pixmap.transformed(
+        QTransform().rotate(float(degrees)),
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    return QIcon(rotated)
 
 def _soft_break_escaped_token(token):
     token = html.escape(str(token or ""))
@@ -941,6 +956,11 @@ class AttachmentPreviewStrip(QWidget):
 # Google Drive picker UI is parked until OAuth sign-in is reworked.
 
 class MessageBubble(QFrame):
+    user_collapse_changed = pyqtSignal(bool, bool)
+
+    USER_COLLAPSED_LINES = 6
+    WIDGET_MAX_HEIGHT = 16777215
+
     def __init__(self, text, is_user=False, parent_width=450, attachments=None):
         super().__init__()
         self.is_user = is_user
@@ -951,6 +971,8 @@ class MessageBubble(QFrame):
         self.copy_text = str(text or "")
         self.attachments = normalize_attachments(attachments or [])
         self.code_blocks = []
+        self._user_message_collapsible = False
+        self._user_message_collapsed = True
         
         self.steps_container = QWidget()
         self.steps_layout = QVBoxLayout(self.steps_container)
@@ -1054,12 +1076,14 @@ class MessageBubble(QFrame):
             block.apply_theme()
         for tile in self.findChildren(AttachmentTile):
             tile.apply_theme()
+        self._apply_user_message_collapse_state()
         apply_soft_shadow(self, blur=22, y=7, alpha=30)
 
     def update_parent_width(self, parent_width):
         self.max_w = max(220, int(parent_width * 0.76) - 30)
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
+        self._update_user_message_collapse_state()
         for block in self.findChildren(CodeBlockWidget):
             block.update_parent_width(self.max_w)
         for tile in self.findChildren(AttachmentTile):
@@ -1099,6 +1123,72 @@ class MessageBubble(QFrame):
                 widget.setParent(None)
                 if widget is not self.final_label:
                     widget.deleteLater()
+
+    def _user_collapsed_label_height(self):
+        metrics = QFontMetrics(self.final_label.font())
+        return max(1, metrics.lineSpacing() * self.USER_COLLAPSED_LINES + 6)
+
+    def _final_label_natural_height(self):
+        label_text = str(self.final_label.text() or "").strip()
+        if not label_text:
+            return 0
+        try:
+            doc = QTextDocument()
+            doc.setDefaultFont(self.final_label.font())
+            doc.setTextWidth(max(1, self.max_w))
+            doc.setHtml(label_text if label_text.lstrip().startswith("<") else f"<span>{label_text}</span>")
+            height = doc.size().height()
+            if height and height > 0:
+                return int(height + 0.5)
+        except Exception:
+            pass
+        try:
+            height = self.final_label.heightForWidth(max(1, self.max_w))
+            if height and height > 0:
+                return int(height)
+        except Exception:
+            pass
+        return int(self.final_label.sizeHint().height())
+
+    def _should_collapse_user_message(self):
+        if not self.is_user or not str(self.final_label.text() or "").strip():
+            return False
+        if not str(self.copy_text or "").strip():
+            return False
+        if len(str(self.copy_text).splitlines()) > self.USER_COLLAPSED_LINES:
+            return True
+        return self._final_label_natural_height() > self._user_collapsed_label_height() + 2
+
+    def _apply_user_message_collapse_state(self):
+        if not self._user_message_collapsible:
+            self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
+            self.user_collapse_changed.emit(False, True)
+            return
+        self.final_label.setMaximumHeight(
+            self._user_collapsed_label_height()
+            if self._user_message_collapsed else self.WIDGET_MAX_HEIGHT
+        )
+        self.user_collapse_changed.emit(True, self._user_message_collapsed)
+
+    def user_collapse_state(self):
+        return self._user_message_collapsible, self._user_message_collapsed
+
+    def _update_user_message_collapse_state(self):
+        collapsible = self._should_collapse_user_message()
+        if collapsible and not self._user_message_collapsible:
+            self._user_message_collapsed = True
+        elif not collapsible:
+            self._user_message_collapsed = True
+        self._user_message_collapsible = collapsible
+        self._apply_user_message_collapse_state()
+        self._refresh_layout()
+
+    def toggle_user_message_collapse(self):
+        if not self._user_message_collapsible:
+            return
+        self._user_message_collapsed = not self._user_message_collapsed
+        self._apply_user_message_collapse_state()
+        self._refresh_layout()
 
     def _add_attachment_widgets(self):
         for item in self.attachments:
@@ -1166,11 +1256,18 @@ class MessageBubble(QFrame):
             if technical_details:
                 rendered_html = f"{rendered_html}{self._technical_details_html(technical_details)}"
             self.final_label.setMaximumWidth(self.max_w)
+            self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
             self.final_label.setText(rendered_html if rendered_html.lstrip().startswith("<") else f"<span>{rendered_html}</span>")
             self.final_label.show()
             self.final_layout.addWidget(self.final_label)
+            self._update_user_message_collapse_state()
+            QTimer.singleShot(0, self._update_user_message_collapse_state)
         else:
             self.final_label.hide()
+            self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
+            self._user_message_collapsible = False
+            self._user_message_collapsed = True
+            self.user_collapse_changed.emit(False, True)
             for kind, content, language in parts:
                 if kind == "code":
                     self.code_blocks.append(content)
@@ -1265,6 +1362,15 @@ class ChatMessageContainer(QWidget):
             set_themed_button_icon(self.copy_btn, ("copy_icon",), "⧉", 15, clear_text=True)
             self.copy_btn.clicked.connect(self.copy_message_text)
 
+        self.user_collapse_btn = None
+        if self.show_actions and is_user:
+            self.user_collapse_btn = QPushButton()
+            self.user_collapse_btn.setFixedSize(24, 24)
+            self.user_collapse_btn.setToolTip("הרחב הודעה")
+            self.user_collapse_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.user_collapse_btn.clicked.connect(self.toggle_user_message_collapse)
+            self.user_collapse_btn.hide()
+
         self.tts_btn = None
         if self.show_actions and not is_user:
             self.tts_btn = QPushButton()
@@ -1278,6 +1384,7 @@ class ChatMessageContainer(QWidget):
             self.actions_container.hide()
         elif is_user:
             actions_layout.addWidget(self.copy_btn)
+            actions_layout.addWidget(self.user_collapse_btn)
             actions_layout.addStretch()
         else:
             actions_layout.addStretch()
@@ -1298,7 +1405,9 @@ class ChatMessageContainer(QWidget):
         self._enter_opacity = None
         self._enter_anim = None
         self._enter_slide_anim = None
+        self.bubble.user_collapse_changed.connect(self.update_user_collapse_button_state)
         self.apply_theme()
+        self.update_user_collapse_button_state(*self.bubble.user_collapse_state())
 
     def _button_css(self, active=False):
         color = DANGER_COLOR if active else MUTED_TEXT_COLOR
@@ -1318,9 +1427,42 @@ class ChatMessageContainer(QWidget):
         if self.copy_btn:
             refresh_themed_button_icon(self.copy_btn)
             self.copy_btn.setStyleSheet(self._button_css(False))
+        if self.user_collapse_btn:
+            self.user_collapse_btn.setStyleSheet(self._button_css(False))
+            self.update_user_collapse_button_state(*self.bubble.user_collapse_state())
         self.update_tts_button_state(self._tts_active, self._tts_blocked)
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
+
+    def _set_user_collapse_button_icon(self, collapsed=None):
+        if not self.user_collapse_btn:
+            return
+        if collapsed is None:
+            _, collapsed = self.bubble.user_collapse_state()
+        icon_size = 15
+        icon_names = (
+            "message_collapse_arrow_icon",
+            "message_collapse_arrow",
+            "collapse_arrow_icon",
+            "collapse_arrow",
+            "dropdown",
+        )
+        icon = _rotated_themed_icon(icon_names, 0 if collapsed else 180, icon_size)
+        self.user_collapse_btn.setIcon(icon if not icon.isNull() else _transparent_icon(icon_size))
+        self.user_collapse_btn.setIconSize(QSize(icon_size, icon_size))
+        self.user_collapse_btn.setText("")
+
+    def update_user_collapse_button_state(self, collapsible=None, collapsed=None):
+        if not self.user_collapse_btn:
+            return
+        if collapsible is None or collapsed is None:
+            collapsible, collapsed = self.bubble.user_collapse_state()
+        collapsible = bool(collapsible)
+        collapsed = bool(collapsed)
+        self.user_collapse_btn.setVisible(collapsible)
+        self.user_collapse_btn.setEnabled(collapsible)
+        self.user_collapse_btn.setToolTip("הרחב הודעה" if collapsed else "כווץ הודעה")
+        self._set_user_collapse_button_icon(collapsed)
 
     def update_tts_button_state(self, active=False, blocked=False):
         if not self.tts_btn:
@@ -1402,6 +1544,10 @@ class ChatMessageContainer(QWidget):
         if not self.copy_btn:
             return
         QApplication.clipboard().setText(self.bubble.plain_text())
+
+    def toggle_user_message_collapse(self):
+        if self.user_collapse_btn:
+            self.bubble.toggle_user_message_collapse()
 
 # Disabled fallback prototype for a custom PyQt quick-reply popup.
 # Smarti no longer instantiates or shows this widget; it is kept as a reference
