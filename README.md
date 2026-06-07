@@ -146,7 +146,7 @@ On Windows, new installs store runtime data under `%APPDATA%\SmartiAI` by defaul
 
 Smarti is no longer licensed under the MIT License for new versions.
 
-Starting from version V0.68.1, Smarti is licensed under the:
+Starting from version V0.69.0, Smarti is licensed under the:
 
 **PolyForm Noncommercial License 1.0.0**
 
@@ -315,7 +315,7 @@ Smarti שומר הגדרות, נתוני שימוש, זיכרון ולוגים �
 
 סמארטי כבר אינה מופצת ברישיון MIT עבור גרסאות חדשות.
 
-החל מגרסה V0.68.1, סמארטי מופצת תחת הרישיון:
+החל מגרסה V0.69.0, סמארטי מופצת תחת הרישיון:
 
 **PolyForm Noncommercial License 1.0.0**
 
