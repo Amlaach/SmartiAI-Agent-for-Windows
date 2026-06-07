@@ -572,16 +572,6 @@ class PillInputFrame(QFrame):
 
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(path)
-        accent_color = qcolor_from_css(ACCENT_COLOR, alpha=92 if self._hovered else 62)
-        accent_pen = QPen(accent_color, 1)
-        accent_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(accent_pen)
-        painter.drawArc(rect.adjusted(2, 2, -2, -2), 14 * 16, 72 * 16)
-        pink_color = qcolor_from_css(ACCENT_PINK_COLOR, alpha=70 if self._hovered else 46)
-        pink_pen = QPen(pink_color, 1)
-        pink_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pink_pen)
-        painter.drawArc(rect.adjusted(2, 2, -2, -2), 190 * 16, 54 * 16)
         painter.end()
 
 class PinnedActionButtonHost(QWidget):
@@ -2174,6 +2164,7 @@ class ChatWindow(QMainWindow):
         self.agent_running = False
         self.current_agent_bubble = None
         self.current_agent_container = None
+        self._last_user_anchor_container = None
         self.active_tts_container = None
         self.tts_active = False
         self.tts_thread = None
@@ -3096,7 +3087,7 @@ class ChatWindow(QMainWindow):
             self.bring_to_front()
             return
         self.core.stop_speaking()
-        self.add_message(text, is_user=True)
+        self.add_message(text, is_user=True, anchor_user=True)
         self.process_request(text)
 
     def resizeEvent(self, event):
@@ -3116,6 +3107,29 @@ class ChatWindow(QMainWindow):
         overlay_h = max(112, self.input_overlay.sizeHint().height() + 22)
         if margins.bottom() != overlay_h:
             self.chat_layout.setContentsMargins(margins.left(), margins.top(), margins.right(), overlay_h)
+
+    def _scroll_container_to_view_top(self, container):
+        if not container or not hasattr(self, "scroll") or not hasattr(self, "chat_widget"):
+            return
+        try:
+            self._update_chat_bottom_padding()
+            self.chat_widget.adjustSize()
+            bar = self.scroll.verticalScrollBar()
+            y = container.mapTo(self.chat_widget, QPoint(0, 0)).y()
+            bar.setValue(max(bar.minimum(), min(y, bar.maximum())))
+        except RuntimeError:
+            pass
+        except Exception as exc:
+            logging.debug("Failed to align chat scroll anchor: %s", exc)
+
+    def _schedule_scroll_container_to_view_top(self, container, delays=(0, 60, 180)):
+        if not container:
+            return
+        for delay in delays:
+            QTimer.singleShot(int(delay), lambda c=container: self._scroll_container_to_view_top(c))
+
+    def _schedule_scroll_last_user_to_view_top(self, delays=(0, 60, 180)):
+        self._schedule_scroll_container_to_view_top(getattr(self, "_last_user_anchor_container", None), delays)
 
     def on_tts_status(self, is_playing):
         self.tts_active = bool(is_playing)
@@ -3324,7 +3338,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, anchor_user=False):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         available_width = self.scroll.viewport().width() or self.width()
@@ -3339,8 +3353,9 @@ class ChatWindow(QMainWindow):
         self._wire_message_container(container)
         self.chat_layout.addWidget(container)
         QTimer.singleShot(0, container.start_entry_animation)
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
-        QTimer.singleShot(180, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+        if is_user and anchor_user:
+            self._last_user_anchor_container = container
+            self._schedule_scroll_container_to_view_top(container)
         return container
 
     def send_text(self):
@@ -3351,7 +3366,7 @@ class ChatWindow(QMainWindow):
         self.pending_attachments = []
         self.refresh_pending_attachments()
         self.core.stop_speaking() 
-        self.add_message(text, is_user=True, attachments=attachments)
+        self.add_message(text, is_user=True, attachments=attachments, anchor_user=True)
         self.process_request(text, attachments=attachments)
 
     def trigger_voice_from_hotkey(self):
@@ -3383,7 +3398,7 @@ class ChatWindow(QMainWindow):
         self.input_field.setEnabled(True)
         self.action_btn.setEnabled(True)
         if text:
-            self.add_message(text, is_user=True)
+            self.add_message(text, is_user=True, anchor_user=True)
             self.process_request(text, is_voice=True)
 
     def process_request(self, text, is_voice=False, attachments=None):
@@ -3404,6 +3419,7 @@ class ChatWindow(QMainWindow):
         self.current_agent_bubble = self.current_agent_container.bubble
         self.chat_layout.addWidget(self.current_agent_container)
         self.current_agent_container.hide() 
+        self._schedule_scroll_last_user_to_view_top()
         
         self.agent_thread = AgentWorker(self.core, text, attachments=attachments)
         self.agent_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
@@ -3419,7 +3435,7 @@ class ChatWindow(QMainWindow):
             self.current_agent_bubble.add_step(step_text)
             if self.current_agent_container:
                 self.current_agent_container.reveal_with_entry_animation()
-            QTimer.singleShot(50, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+            self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
 
     def show_confirm_dialog(self, title, text, risk="medium"):
         decision = None
@@ -3522,12 +3538,13 @@ class ChatWindow(QMainWindow):
         if self.history_page is not None:
             self.history_page.load_sessions()
         self.refresh_chat_title()
-        QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+        self._schedule_scroll_last_user_to_view_top(delays=(0, 80, 220))
 
     def _clear_chat_widgets(self):
         self.core.stop_speaking()
         self.tts_active = False
         self.active_tts_container = None
+        self._last_user_anchor_container = None
         while self.chat_layout.count():
             item = self.chat_layout.takeAt(0)
             widget = item.widget()

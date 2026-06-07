@@ -53,33 +53,6 @@ class MeshGradientWidget(QWidget):
         base.setColorAt(0.74, qcolor_from_css(MESH_C))
         base.setColorAt(1.00, qcolor_from_css(MESH_D))
         painter.fillRect(rect, QBrush(base))
-
-        w, h = max(1.0, rect.width()), max(1.0, rect.height())
-
-        def neon_pen(color, alpha, width):
-            pen_color = qcolor_from_css(color)
-            pen_color.setAlpha(alpha)
-            pen = QPen(pen_color, width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            return pen
-
-        arcs = [
-            (ACCENT_COLOR, 62, 1.2, QRectF(w * 0.18, h * 0.07, w * 1.35, h * 1.12), 202, 86),
-            (ACCENT_PINK_COLOR, 44, 1.0, QRectF(-w * 0.34, h * 0.05, w * 1.18, h * 1.22), 294, 70),
-            (ACCENT_SECONDARY_COLOR, 34, 0.9, QRectF(w * 0.42, h * 0.38, w * 1.08, h * 0.95), 110, 62),
-            (BRAND_VIOLET_COLOR, 30, 0.8, QRectF(-w * 0.08, h * 0.30, w * 1.42, h * 1.05), 210, 88),
-        ]
-        for color, alpha, width, arc_rect, start, span in arcs:
-            painter.setPen(neon_pen(color, alpha, width))
-            painter.drawArc(arc_rect, int(start * 16), int(span * 16))
-
-        point_color = qcolor_from_css(ACCENT_COLOR, alpha=54 if CURRENT_THEME == "dark" else 42)
-        painter.setPen(QPen(point_color, 1))
-        for i in range(18):
-            x = ((i * 73) % 1000) / 1000.0 * w
-            y = ((i * 157 + 91) % 1000) / 1000.0 * h
-            if i % 4 != 0:
-                painter.drawPoint(QPoint(int(x), int(y)))
         painter.end()
 
 class NoScrollComboBox(QComboBox):
