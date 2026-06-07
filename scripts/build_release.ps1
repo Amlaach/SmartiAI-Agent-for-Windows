@@ -60,6 +60,28 @@ function Resolve-ReleaseVersion {
     return "dev"
 }
 
+function Get-AppVersionFromSource {
+    $commonPath = Join-Path $RepoRoot "smarti\common.py"
+    $line = Select-String -LiteralPath $commonPath -Pattern '^\s*APP_VERSION\s*=\s*["'']([^"'']+)["'']' | Select-Object -First 1
+    if (-not $line -or -not $line.Matches.Count) {
+        throw "Could not read APP_VERSION from $commonPath"
+    }
+    return (Get-SafeVersion $line.Matches[0].Groups[1].Value)
+}
+
+function Assert-AppVersionMatchesRelease {
+    param([Parameter(Mandatory = $true)][string]$ReleaseVersion)
+    if ($ReleaseVersion -notmatch '^\d+(?:\.\d+){1,3}(?:[-_.][A-Za-z0-9]+)?$') {
+        Write-Warning "Skipping APP_VERSION sync check for non-release version '$ReleaseVersion'."
+        return
+    }
+    $appVersion = Get-AppVersionFromSource
+    if ($appVersion -ne $ReleaseVersion) {
+        throw "APP_VERSION mismatch. smarti\common.py has $appVersion, but this build is $ReleaseVersion."
+    }
+    Write-Host "APP_VERSION sync OK: $appVersion"
+}
+
 function Resolve-HostPython {
     if ($env:SMARTI_BUILD_PYTHON -and (Test-Path $env:SMARTI_BUILD_PYTHON)) {
         return $env:SMARTI_BUILD_PYTHON
@@ -157,6 +179,7 @@ function Assert-InstallerPathBudget {
 
 $ReleaseVersion = Resolve-ReleaseVersion
 Write-Host "Building SmartiAI release $ReleaseVersion"
+Assert-AppVersionMatchesRelease -ReleaseVersion $ReleaseVersion
 
 if ($Clean) {
     foreach ($path in @($BuildDir, $DistRoot, $BuildVenv, $DownloadCacheDir, $PyInstallerWorkDir, $ReleaseDir, (Join-Path $RepoRoot "build"), (Join-Path $RepoRoot "dist"), (Join-Path $RepoRoot ".venv-build"))) {

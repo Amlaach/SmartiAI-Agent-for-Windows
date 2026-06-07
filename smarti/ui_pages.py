@@ -702,7 +702,7 @@ class ApiKeyRequiredDialog(QDialog):
 
 class UsageStatsPage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -904,7 +904,7 @@ class UsageStatsPage(QWidget):
 
 class TaskCenterPage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -999,7 +999,7 @@ class TaskCenterPage(QWidget):
 
 class DeveloperTracePage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1039,7 +1039,7 @@ class DeveloperTracePage(QWidget):
 
 class ToolsSettingsPage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1289,7 +1289,7 @@ class ToolsSettingsPage(QWidget):
 
 class SettingsPage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self._suppress_autosave = True
@@ -2567,7 +2567,7 @@ class SettingsPage(QWidget):
 
 class AboutPage(QWidget):
     def __init__(self, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         layout = QVBoxLayout(self)

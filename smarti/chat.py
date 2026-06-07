@@ -1212,8 +1212,8 @@ class MessageBubble(QFrame):
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
-    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None):
-        super().__init__()
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, parent=None):
+        super().__init__(parent)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -1603,7 +1603,7 @@ class EndElideLabel(QLabel):
 
 class ChatHistoryPage(QWidget):
     def __init__(self, core, main_window):
-        super().__init__()
+        super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1930,24 +1930,9 @@ class ReleaseNotesBrowser(QTextBrowser):
                 if url.isRelative():
                     url = self.document().baseUrl().resolved(url)
                 if url.scheme().lower() in {"http", "https"}:
-                    url_text = url.toString()
-                    if url_text in self._image_cache:
-                        return self._image_cache[url_text]
-                    kwargs = ssl_request_kwargs(bool(self._request_settings.get("allow_insecure_ssl_compat", True)))
-                    kwargs["timeout"] = (5, 25)
-                    response = requests.get(
-                        url_text,
-                        headers={"User-Agent": f"{SMARTI_APP_DISPLAY_NAME}/{APP_VERSION}"},
-                        **kwargs,
-                    )
-                    response.raise_for_status()
-                    image = QImage()
-                    if image.loadFromData(response.content):
-                        max_width = int(self.viewport().width()) - 28
-                        if max_width >= 240 and image.width() > max_width:
-                            image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
-                        self._image_cache[url_text] = image
-                        return image
+                    # QTextBrowser calls loadResource on the GUI thread. Skip
+                    # remote images so release notes cannot freeze the dialog.
+                    return QImage()
             except Exception as exc:
                 logging.debug("Failed to load release note image %s: %s", name, exc)
         return super().loadResource(resource_type, name)
@@ -3317,7 +3302,14 @@ class ChatWindow(QMainWindow):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         available_width = self.scroll.viewport().width() or self.width()
-        container = ChatMessageContainer(text, is_user, available_width, show_actions=show_actions, attachments=attachments)
+        container = ChatMessageContainer(
+            text,
+            is_user,
+            available_width,
+            show_actions=show_actions,
+            attachments=attachments,
+            parent=self.chat_widget,
+        )
         self._wire_message_container(container)
         self.chat_layout.addWidget(container)
         QTimer.singleShot(0, container.start_entry_animation)
@@ -3376,7 +3368,12 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         
         available_width = self.scroll.viewport().width() or self.width()
-        self.current_agent_container = ChatMessageContainer("", is_user=False, parent_width=available_width)
+        self.current_agent_container = ChatMessageContainer(
+            "",
+            is_user=False,
+            parent_width=available_width,
+            parent=self.chat_widget,
+        )
         self._wire_message_container(self.current_agent_container)
         self.current_agent_bubble = self.current_agent_container.bubble
         self.chat_layout.addWidget(self.current_agent_container)
@@ -3555,8 +3552,15 @@ class ChatWindow(QMainWindow):
 class AnimatedSplash(QWidget):
     def __init__(self, anim_path, fallback_path, size, border_color, border_width, radius, bg_color):
         super().__init__()
-        self.setWindowFlags(Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setFixedSize(size, size)
         self.border_width, self.border_color, self.radius, self.bg_color = border_width, QColor(border_color), radius, QColor(bg_color)
         
@@ -3585,6 +3589,19 @@ class AnimatedSplash(QWidget):
             self.lbl.setFont(QFont("Segoe UI", int(size/3), QFont.Weight.Bold))
             self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.lbl.setStyleSheet(f"color: {border_color}; background-color: {bg_color};")
+
+    def center_on_screen(self):
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.move(
+                available.x() + max(0, (available.width() - self.width()) // 2),
+                available.y() + max(0, (available.height() - self.height()) // 2),
+            )
+
+    def showEvent(self, event):
+        self.center_on_screen()
+        super().showEvent(event)
             
     def paintEvent(self, event):
         painter = QPainter(self)

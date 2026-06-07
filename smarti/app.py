@@ -85,6 +85,7 @@ def main():
         if gif_candidates: gif_path = gif_candidates[0]
 
     splash = AnimatedSplash(gif_path, os.path.join(ASSETS_DIR, "logo.png"), splash_size, ACCENT_COLOR, border_width, radius, BG_COLOR)
+    splash.center_on_screen()
     splash.show()
     app.processEvents()
 
