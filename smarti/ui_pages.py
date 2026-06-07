@@ -282,7 +282,7 @@ class ActionConfirmDialog(QDialog):
             QLabel#ActionConfirmIcon {{
                 color: {ACCENT_TEXT_COLOR};
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                    stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
                 border: none;
                 border-radius: 17px;
                 font-size: 18px;
@@ -338,7 +338,7 @@ class ActionConfirmDialog(QDialog):
             }}
             QPushButton#ActionConfirmAcceptButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                    stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
                 color: {ACCENT_TEXT_COLOR};
                 border: none;
                 border-radius: 16px;
@@ -349,7 +349,7 @@ class ActionConfirmDialog(QDialog):
             }}
             QPushButton#ActionConfirmAcceptButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
+                    stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
             }}
             QPushButton#ActionConfirmAcceptButton:pressed {{
                 background: {ACCENT_COLOR};
@@ -1658,9 +1658,9 @@ class SettingsPage(QWidget):
         self.loops_slider.setStyleSheet(SLIDER_CSS)
         self.loops_val_lbl = QLabel(self._loop_label_text(self.loops_slider.value()))
         self.loops_val_lbl.setStyleSheet(f"""
-            background-color: {ACCENT_TINT};
+            background-color: {GLASS_COLOR};
             color: {TEXT_COLOR}; font-weight: 700; font-size: 13px;
-            border: none;
+            border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 999px; padding: 7px 12px;
         """)
         self.loops_val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1670,9 +1670,9 @@ class SettingsPage(QWidget):
 
     def _value_pill_css(self):
         return f"""
-            background-color: {ACCENT_TINT};
+            background-color: {GLASS_COLOR};
             color: {TEXT_COLOR}; font-weight: 700; font-size: 13px;
-            border: none;
+            border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 999px; padding: 7px 12px;
         """
 
@@ -2471,8 +2471,10 @@ class SettingsPage(QWidget):
         if active:
             return f"""
                 QPushButton {{
-                    background-color: {ACCENT_COLOR}; color: {ACCENT_TEXT_COLOR};
-                    border: none; border-radius: 18px;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                    color: {ACCENT_TEXT_COLOR};
+                    border: 1px solid rgba(255,255,255,0.18); border-radius: 18px;
                     padding: 9px 14px; font-size: 13px; font-weight: 700;
                 }}
             """
@@ -2632,7 +2634,7 @@ class AboutPage(QWidget):
         tagline.setWordWrap(True)
         version = QLabel(f"גרסה {APP_VERSION}")
         version.setStyleSheet(
-            f"background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: none; "
+            f"background: {GLASS_COLOR}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
             "border-radius: 14px; padding: 6px 10px; font-size: 12px; font-weight: 800;"
         )
         version.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -2659,8 +2661,8 @@ class AboutPage(QWidget):
         github_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
             "border-radius: 18px; padding: 11px 14px; font-size: 13px; font-weight: 800; text-align: center; }}"
-            f"QPushButton:hover {{ background: {HOVER_TINT}; color: {ACCENT_COLOR}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; color: {ACCENT_COLOR}; border-color: {LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {ACCENT_PINK_COLOR}; }}"
         )
         github_btn.clicked.connect(lambda: webbrowser.open("https://github.com/menachem-dadon/SmartiAI-Agent-for-Windows"))
         content_layout.addWidget(github_btn)
@@ -2736,7 +2738,7 @@ class AboutPage(QWidget):
     def _example_row(self, text):
         row = QFrame()
         row.setStyleSheet(
-            f"QFrame {{ background: {ACCENT_TINT}; border: none; border-radius: 16px; }}"
+            f"QFrame {{ background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; }}"
             "QLabel { border: none; background: transparent; }"
         )
         row_layout = QHBoxLayout(row)

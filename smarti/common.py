@@ -417,9 +417,21 @@ def ensure_ui_svg_asset(filename, svg_text):
     try:
         os.makedirs(ASSETS_DIR, exist_ok=True)
         path = os.path.join(ASSETS_DIR, filename)
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(svg_text)
+        current = None
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    current = f.read()
+            except Exception:
+                current = None
+        if current != svg_text:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(svg_text)
+            except Exception:
+                if os.path.exists(path):
+                    return path.replace("\\", "/")
+                raise
         return path.replace("\\", "/")
     except Exception:
         return ""

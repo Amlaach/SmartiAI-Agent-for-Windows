@@ -560,17 +560,28 @@ class PillInputFrame(QFrame):
         path.addRoundedRect(rect, radius, radius)
 
         if self._hovered:
-            painter.fillPath(path, QColor(FIELD_HOVER_COLOR))
-            border_color = QColor(LINE_COLOR)
+            painter.fillPath(path, qcolor_from_css(FIELD_HOVER_COLOR))
+            border_color = qcolor_from_css(LINE_COLOR)
         else:
             gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-            gradient.setColorAt(0.0, QColor(GLASS_STRONG_COLOR))
-            gradient.setColorAt(1.0, QColor(INPUT_GRADIENT_END))
+            gradient.setColorAt(0.0, qcolor_from_css(GLASS_STRONG_COLOR))
+            gradient.setColorAt(0.64, qcolor_from_css(INPUT_GRADIENT_END))
+            gradient.setColorAt(1.0, qcolor_from_css("#170A2C" if CURRENT_THEME == "dark" else TOP_GRADIENT_C))
             painter.fillPath(path, QBrush(gradient))
-            border_color = QColor(SOFT_LINE_COLOR)
+            border_color = qcolor_from_css(SOFT_LINE_COLOR)
 
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(path)
+        accent_color = qcolor_from_css(ACCENT_COLOR, alpha=92 if self._hovered else 62)
+        accent_pen = QPen(accent_color, 1)
+        accent_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(accent_pen)
+        painter.drawArc(rect.adjusted(2, 2, -2, -2), 14 * 16, 72 * 16)
+        pink_color = qcolor_from_css(ACCENT_PINK_COLOR, alpha=70 if self._hovered else 46)
+        pink_pen = QPen(pink_color, 1)
+        pink_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pink_pen)
+        painter.drawArc(rect.adjusted(2, 2, -2, -2), 190 * 16, 54 * 16)
         painter.end()
 
 class PinnedActionButtonHost(QWidget):
@@ -665,20 +676,20 @@ class CodeBlockWidget(QFrame):
 
     def _button_css(self):
         return (
-            "QPushButton { background: transparent; border: none; border-radius: 14px; "
+            "QPushButton { background: transparent; border: 1px solid transparent; border-radius: 14px; "
             f"color: {TEXT_COLOR}; padding: 0px; font-size: 18px; font-weight: 800; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+            f"QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
 
     def apply_theme(self):
-        code_bg = "#121212" if CURRENT_THEME == "dark" else "#F4FAFC"
-        code_border = "rgba(255,255,255,0.05)" if CURRENT_THEME == "dark" else SOFT_LINE_COLOR
-        code_text = "#F6F7FA" if CURRENT_THEME == "dark" else "#062033"
+        code_bg = "rgba(2,6,18,0.82)" if CURRENT_THEME == "dark" else "#F7FAFF"
+        code_border = "rgba(53,217,255,0.22)" if CURRENT_THEME == "dark" else SOFT_LINE_COLOR
+        code_text = "#F8FBFF" if CURRENT_THEME == "dark" else "#062033"
         muted = "#F6F7FA" if CURRENT_THEME == "dark" else TEXT_COLOR
-        selection = "rgba(76,202,252,0.28)" if CURRENT_THEME == "dark" else ACCENT_TINT_STRONG
+        selection = "rgba(255,77,221,0.22)" if CURRENT_THEME == "dark" else ACCENT_TINT_STRONG
         self.setStyleSheet(
-            f"QFrame#CodeBlockWidget {{ background: {code_bg}; border: 1px solid {code_border}; border-radius: 24px; }}"
+            f"QFrame#CodeBlockWidget {{ background: {code_bg}; border: 1px solid {code_border}; border-radius: 22px; }}"
         )
         refresh_themed_button_icon(self.copy_btn)
         refresh_themed_button_icon(self.download_btn)
@@ -793,8 +804,8 @@ class AttachmentTile(QFrame):
         refresh_themed_widget_icons(self)
         if not self._is_image:
             self.setStyleSheet(
-                f"AttachmentTile {{ background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; "
-                f"border-radius: 12px; }}"
+                f"AttachmentTile {{ background: {GLASS_COLOR}; border: 1px solid {LINE_COLOR}; "
+                f"border-radius: 16px; }}"
                 f"QLabel {{ background: transparent; color: {TEXT_COLOR}; }}"
             )
 
@@ -811,7 +822,7 @@ class AttachmentTile(QFrame):
             label = QLabel()
             label.setFixedSize(side, side)
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet(f"background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; border-radius: 14px;")
+            label.setStyleSheet(f"background: {GLASS_COLOR}; border: 1px solid {LINE_COLOR}; border-radius: 16px;")
             if not pixmap.isNull():
                 label.setPixmap(pixmap.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation))
             else:
@@ -845,8 +856,8 @@ class AttachmentTile(QFrame):
         self.setMaximumWidth(430)
         self.setFixedHeight(68 if self.compact else 72)
         self.setStyleSheet(
-            f"AttachmentTile {{ background: {FIELD_COLOR}; border: 1px solid {LINE_COLOR}; "
-            f"border-radius: 12px; }}"
+            f"AttachmentTile {{ background: {GLASS_COLOR}; border: 1px solid {LINE_COLOR}; "
+            f"border-radius: 16px; }}"
             f"QLabel {{ background: transparent; color: {TEXT_COLOR}; }}"
         )
         layout = QHBoxLayout(self)
@@ -875,8 +886,8 @@ class AttachmentTile(QFrame):
         label.setFixedSize(50, 50)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setStyleSheet(
-            f"background: {MUTED_TEXT_COLOR}; color: {FIELD_COLOR}; border: none; "
-            f"border-radius: 10px; font-size: 11px; font-weight: 800;"
+            f"background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            f"border-radius: 14px; font-size: 11px; font-weight: 800;"
         )
         set_themed_label_icon(label, ("file_attachment_icon", "attachment_file_icon", "file_icon"), _attachment_icon_text(self.attachment), 28)
         return label
@@ -1010,7 +1021,7 @@ class MessageBubble(QFrame):
             return "#006DCC"
         if self.is_user:
             return BUBBLE_USER_TEXT
-        return "#FFF2A8"
+        return ACCENT_PINK_COLOR
 
     def _apply_link_palette(self, label):
         link_color = QColor(self._link_color())
@@ -1023,11 +1034,11 @@ class MessageBubble(QFrame):
         bg = (
             USER_BUBBLE_COLOR
             if self.is_user
-            else f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {BUBBLE_AGENT_END})"
+            else f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:0.62 {BUBBLE_AGENT_END}, stop:1 {PANEL_COLOR})"
         )
         color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
         link_color = self._link_color()
-        radius = "24px"
+        radius = "22px"
         border = f"1px solid {USER_BUBBLE_BORDER if self.is_user else SOFT_LINE_COLOR}"
 
         self.toggle_btn.setStyleSheet(
@@ -1036,8 +1047,8 @@ class MessageBubble(QFrame):
             f"QPushButton:hover {{ color: {ACCENT_SECONDARY_COLOR}; }}"
         )
         self.steps_label.setStyleSheet(
-            f"color: {MUTED_TEXT_COLOR}; font-size: 13px; background: {ACCENT_TINT}; "
-            f"padding: 10px; border: none; border-radius: 10px;"
+            f"color: {MUTED_TEXT_COLOR}; font-size: 13px; background: {GLASS_COLOR}; "
+            f"padding: 10px; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 12px;"
         )
         for label in self.findChildren(QLabel):
             self._apply_link_palette(label)
@@ -1420,18 +1431,18 @@ class QuickReplyToast(QWidget):
         self.setFixedWidth(390)
         self.setStyleSheet(f"""
             QWidget {{
-                background: {PANEL_COLOR};
+                background: {GLASS_STRONG_COLOR};
                 color: {TEXT_COLOR};
                 font-family: 'Segoe UI', Arial;
                 border: 1px solid {SOFT_LINE_COLOR};
-                border-radius: 24px;
+                border-radius: 22px;
             }}
             QLabel {{
                 background: transparent;
                 border: none;
             }}
             QLineEdit {{
-                background: {FIELD_COLOR};
+                background: {GLASS_COLOR};
                 color: {FIELD_TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 18px;
@@ -1440,16 +1451,21 @@ class QuickReplyToast(QWidget):
                 selection-background-color: {ACCENT_TINT_STRONG};
                 selection-color: {TEXT_COLOR};
             }}
+            QLineEdit:focus {{
+                border-color: {ACCENT_PINK_COLOR};
+                background: {FIELD_HOVER_COLOR};
+            }}
             QPushButton {{
                 background: transparent;
                 color: {ACCENT_COLOR};
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 18px;
                 padding: 9px 14px;
                 font-weight: 700;
             }}
             QPushButton:hover {{
                 background: {ACCENT_TINT};
+                border-color: {SOFT_LINE_COLOR};
             }}
             QPushButton#CloseToast {{
                 border: none;
@@ -1731,7 +1747,7 @@ class ChatHistoryPage(QWidget):
             active = QLabel("פעילה")
             active.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             active.setStyleSheet(
-                f"background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: none; "
+                f"background: {GLASS_COLOR}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
                 "border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 800;"
             )
             title_row.addWidget(active)
@@ -2029,10 +2045,10 @@ class UpdateDialog(QDialog):
         self.notes_browser.setOpenExternalLinks(True)
         self.notes_browser.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.notes_browser.setStyleSheet(
-            f"QTextBrowser {{ background: {PANEL_ELEVATED_COLOR}; color: {TEXT_COLOR}; "
-            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 8px; padding: 12px; "
+            f"QTextBrowser {{ background: {GLASS_COLOR}; color: {TEXT_COLOR}; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 12px; "
             "font-size: 13px; }}"
-            f"QTextBrowser viewport {{ background: {PANEL_ELEVATED_COLOR}; }}"
+            f"QTextBrowser viewport {{ background: transparent; }}"
             f"{SCROLLBAR_CSS}"
         )
         notes = self.update_info.release_notes.strip() or "לא צורפו הערות שחרור לגרסה הזו."
@@ -2062,8 +2078,8 @@ class UpdateDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.progress_bar.setStyleSheet(
             f"QProgressBar {{ background: {PANEL_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-            "border-radius: 8px; height: 18px; text-align: center; }}"
-            f"QProgressBar::chunk {{ background: {ACCENT_COLOR}; border-radius: 8px; }}"
+            "border-radius: 9px; height: 18px; text-align: center; }}"
+            f"QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT_COLOR}, stop:0.56 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR}); border-radius: 9px; }}"
         )
         layout.addWidget(self.progress_bar)
 
@@ -2554,28 +2570,30 @@ class ChatWindow(QMainWindow):
     def _top_bar_stylesheet(self):
         return f"""
             QWidget#TopBar {{
-                background: transparent;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {TOP_GRADIENT_A}, stop:0.62 {TOP_GRADIENT_B}, stop:1 {TOP_GRADIENT_C});
                 border: none;
+                border-bottom: 1px solid {SOFT_LINE_COLOR};
             }}
         """
 
     def _menu_button_stylesheet(self):
         return (
-            f"QPushButton {{ color: {TEXT_COLOR}; background: transparent; border: none; "
+            f"QPushButton {{ color: {TEXT_COLOR}; background: transparent; border: 1px solid transparent; "
             f"border-radius: 24px; padding-bottom: 3px; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+            f"QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
 
     def _update_button_stylesheet(self):
         return (
             "QPushButton#UpdateButton {"
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});"
             f"color: {ACCENT_TEXT_COLOR}; border: 2px solid {ACCENT_WARM_COLOR}; border-radius: 24px;"
             "font-size: 20px; font-weight: 900; padding: 0px;"
             "}"
             "QPushButton#UpdateButton:hover {"
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});"
             f"border-color: {TEXT_COLOR};"
             "}"
             f"QPushButton#UpdateButton:pressed {{ background: {ACCENT_COLOR}; }}"
@@ -2613,6 +2631,7 @@ class ChatWindow(QMainWindow):
         return (
             f"QTextEdit {{ background-color: transparent; color: {FIELD_TEXT_COLOR}; border: none; "
             f"padding: 4px 10px; font-size: 17px; font-family: 'Segoe UI'; outline: none; text-align: left; }}"
+            f"QTextEdit:disabled {{ color: {SUBTLE_TEXT_COLOR}; }}"
             f"QTextEdit viewport {{ background-color: transparent; border: none; }}"
             f"{SCROLLBAR_CSS}"
         )
@@ -2633,10 +2652,10 @@ class ChatWindow(QMainWindow):
             24,
         )
         self.attach_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {TEXT_COLOR}; border: none; "
+            f"QPushButton {{ background: transparent; color: {TEXT_COLOR}; border: 1px solid transparent; "
             f"border-radius: 21px; padding: 0px; font-size: 28px; font-weight: 300; }}"
-            f"QPushButton:hover {{ color: {ACCENT_COLOR}; background: transparent; }}"
-            f"QPushButton:pressed {{ color: {ACCENT_SECONDARY_COLOR}; background: transparent; }}"
+            f"QPushButton:hover {{ color: {ACCENT_COLOR}; background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ color: {ACCENT_PINK_COLOR}; background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
 
     def apply_theme(self, mode=None, refresh_messages=True):
@@ -3259,10 +3278,11 @@ class ChatWindow(QMainWindow):
         if self.agent_running:
             self.action_btn.setToolTip("עצור פעולה")
             set_themed_button_icon(self.action_btn, ("stop_agent_icon",), "■", 28, clear_text=True)
-            border_css, bg_color = "border: none; border-radius: 26px;", ACCENT_SECONDARY_COLOR
+            border_css = "border: 1px solid rgba(136,255,184,0.44); border-radius: 26px;"
+            bg_color = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR})"
             fg_color = ACCENT_TEXT_COLOR
-            hover_bg = ACCENT_COLOR
-            pressed_bg = ACCENT_TINT_STRONG
+            hover_bg = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR})"
+            pressed_bg = ACCENT_PINK_COLOR
             self.action_btn.clicked.connect(self.cancel_agent)
         else:
             self.action_btn.setToolTip("")
@@ -3270,20 +3290,26 @@ class ChatWindow(QMainWindow):
             fallback_text = "שלח" if has_text else "קול"
 
             set_themed_button_icon(self.action_btn, ("send_icon",) if has_text else ("mic_icon",), fallback_text, 28, clear_text=True)
-            border_css = "border: none; border-radius: 26px;"
-            bg_color = ACCENT_COLOR if has_text else ACCENT_TINT_STRONG
+            border_css = f"border: 1px solid {LINE_COLOR if has_text else SOFT_LINE_COLOR}; border-radius: 26px;"
+            bg_color = (
+                f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:0.58 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR})"
+                if has_text else GLASS_COLOR
+            )
             fg_color = ACCENT_TEXT_COLOR if has_text else ACCENT_COLOR
-            hover_bg = ACCENT_SECONDARY_COLOR if has_text else HOVER_TINT
+            hover_bg = (
+                f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:0.58 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR})"
+                if has_text else HOVER_TINT
+            )
             pressed_bg = ACCENT_TINT_STRONG
             
             if has_text: self.action_btn.clicked.connect(self.send_text)
             else: self.action_btn.clicked.connect(self.start_voice)
 
         self.action_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {bg_color}; {border_css} padding: 0px; "
+            f"QPushButton {{ background: {bg_color}; {border_css} padding: 0px; "
             f"color: {fg_color}; font-size: 18px; font-weight: 700; }}"
-            f"QPushButton:hover {{ background-color: {hover_bg}; }}"
-            f"QPushButton:pressed {{ background-color: {pressed_bg}; }}"
+            f"QPushButton:hover {{ background: {hover_bg}; }}"
+            f"QPushButton:pressed {{ background: {pressed_bg}; }}"
             f"QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: transparent; }}"
         )
         self.action_btn.setGraphicsEffect(None)

@@ -48,11 +48,38 @@ class MeshGradientWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect())
         base = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        base.setColorAt(0.00, QColor(MESH_A))
-        base.setColorAt(0.45, QColor(MESH_B))
-        base.setColorAt(0.72, QColor(MESH_C))
-        base.setColorAt(1.00, QColor(MESH_D))
+        base.setColorAt(0.00, qcolor_from_css(MESH_A))
+        base.setColorAt(0.46, qcolor_from_css(MESH_B))
+        base.setColorAt(0.74, qcolor_from_css(MESH_C))
+        base.setColorAt(1.00, qcolor_from_css(MESH_D))
         painter.fillRect(rect, QBrush(base))
+
+        w, h = max(1.0, rect.width()), max(1.0, rect.height())
+
+        def neon_pen(color, alpha, width):
+            pen_color = qcolor_from_css(color)
+            pen_color.setAlpha(alpha)
+            pen = QPen(pen_color, width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            return pen
+
+        arcs = [
+            (ACCENT_COLOR, 62, 1.2, QRectF(w * 0.18, h * 0.07, w * 1.35, h * 1.12), 202, 86),
+            (ACCENT_PINK_COLOR, 44, 1.0, QRectF(-w * 0.34, h * 0.05, w * 1.18, h * 1.22), 294, 70),
+            (ACCENT_SECONDARY_COLOR, 34, 0.9, QRectF(w * 0.42, h * 0.38, w * 1.08, h * 0.95), 110, 62),
+            (BRAND_VIOLET_COLOR, 30, 0.8, QRectF(-w * 0.08, h * 0.30, w * 1.42, h * 1.05), 210, 88),
+        ]
+        for color, alpha, width, arc_rect, start, span in arcs:
+            painter.setPen(neon_pen(color, alpha, width))
+            painter.drawArc(arc_rect, int(start * 16), int(span * 16))
+
+        point_color = qcolor_from_css(ACCENT_COLOR, alpha=54 if CURRENT_THEME == "dark" else 42)
+        painter.setPen(QPen(point_color, 1))
+        for i in range(18):
+            x = ((i * 73) % 1000) / 1000.0 * w
+            y = ((i * 157 + 91) % 1000) / 1000.0 * h
+            if i % 4 != 0:
+                painter.drawPoint(QPoint(int(x), int(y)))
         painter.end()
 
 class NoScrollComboBox(QComboBox):
@@ -121,16 +148,16 @@ class SearchableModelComboBox(NoScrollComboBox):
             self.search_edit.setStyleSheet(LINE_EDIT_CSS)
         if self.results_list:
             self.results_list.setStyleSheet(
-                f"QListWidget {{ background: {FIELD_COLOR}; color: {TEXT_COLOR}; border: none; "
-                f"border-radius: 12px; padding: 4px; outline: none; }}"
-                f"QListWidget::item {{ padding: 8px 10px; border-radius: 8px; }}"
+                f"QListWidget {{ background: {GLASS_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                f"border-radius: 14px; padding: 4px; outline: none; }}"
+                f"QListWidget::item {{ padding: 8px 10px; border-radius: 10px; }}"
                 f"QListWidget::item:hover {{ background: {HOVER_TINT}; }}"
                 f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
             )
         if self._popup:
             self._popup.setStyleSheet(
-                f"QFrame {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                f"border-radius: 16px; padding: 6px; }}"
+                f"QFrame {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                f"border-radius: 18px; padding: 6px; }}"
             )
 
     def set_loading_text(self, text):
@@ -613,12 +640,13 @@ class SmartiCheckBox(QCheckBox):
 
         track = QLinearGradient(switch_rect.topLeft(), switch_rect.bottomRight())
         if self.isChecked():
-            track.setColorAt(0.0, QColor(ACCENT_COLOR))
-            track.setColorAt(1.0, QColor(ACCENT_SECONDARY_COLOR))
+            track.setColorAt(0.0, qcolor_from_css(ACCENT_COLOR))
+            track.setColorAt(0.56, qcolor_from_css(ACCENT_PINK_COLOR))
+            track.setColorAt(1.0, qcolor_from_css(ACCENT_SECONDARY_COLOR))
         else:
-            track.setColorAt(0.0, QColor(FIELD_COLOR))
-            track.setColorAt(1.0, QColor(PANEL_ELEVATED_COLOR))
-        pen = QPen(QColor(SOFT_LINE_COLOR))
+            track.setColorAt(0.0, qcolor_from_css(GLASS_COLOR))
+            track.setColorAt(1.0, qcolor_from_css(PANEL_ELEVATED_COLOR))
+        pen = QPen(qcolor_from_css(LINE_COLOR if self.isChecked() else SOFT_LINE_COLOR))
         pen.setWidth(1)
         painter.setPen(pen)
         painter.setBrush(QBrush(track))
@@ -628,11 +656,12 @@ class SmartiCheckBox(QCheckBox):
         knob_margin = 3
         knob_x = switch_x + switch_w - knob_d - knob_margin if not self.isChecked() else switch_x + knob_margin
         knob_rect = QRectF(knob_x, y + knob_margin, knob_d, knob_d)
-        painter.setBrush(QBrush(QColor(BG_ELEVATED_COLOR)))
+        painter.setBrush(QBrush(qcolor_from_css(TEXT_COLOR if self.isChecked() else BG_ELEVATED_COLOR)))
+        painter.setPen(QPen(qcolor_from_css("rgba(255,255,255,0.46)" if self.isChecked() else SOFT_LINE_COLOR), 1))
         painter.drawEllipse(knob_rect)
 
         text_rect = QRectF(switch_w + 16, 0, max(1, self.width() - switch_w - 18), self.height())
-        painter.setPen(QColor(TEXT_COLOR if self.isEnabled() else SUBTLE_TEXT_COLOR))
+        painter.setPen(qcolor_from_css(TEXT_COLOR if self.isEnabled() else SUBTLE_TEXT_COLOR))
         painter.setFont(self.font())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute, self.text())
         painter.end()
@@ -722,7 +751,7 @@ class RtlFillSlider(QSlider):
 
         track_path = QPainterPath()
         track_path.addRoundedRect(rect, radius, radius)
-        painter.fillPath(track_path, QColor(PANEL_ELEVATED_COLOR if self.isEnabled() else FIELD_COLOR))
+        painter.fillPath(track_path, qcolor_from_css(PANEL_ELEVATED_COLOR if self.isEnabled() else FIELD_COLOR))
 
         span = max(1, self.maximum() - self.minimum())
         ratio = (self.value() - self.minimum()) / span
@@ -732,11 +761,12 @@ class RtlFillSlider(QSlider):
             fill_path = QPainterPath()
             fill_path.addRoundedRect(fill_rect, radius, radius)
             gradient = QLinearGradient(fill_rect.topRight(), fill_rect.topLeft())
-            gradient.setColorAt(0.0, QColor(ACCENT_COLOR))
-            gradient.setColorAt(1.0, QColor(ACCENT_SECONDARY_COLOR))
+            gradient.setColorAt(0.0, qcolor_from_css(ACCENT_COLOR))
+            gradient.setColorAt(0.56, qcolor_from_css(ACCENT_PINK_COLOR))
+            gradient.setColorAt(1.0, qcolor_from_css(ACCENT_SECONDARY_COLOR))
             painter.fillPath(fill_path.intersected(track_path), QBrush(gradient))
 
-        pen = QPen(QColor(SOFT_LINE_COLOR))
+        pen = QPen(qcolor_from_css(SOFT_LINE_COLOR))
         pen.setWidth(1)
         painter.setPen(pen)
         painter.drawPath(track_path)
@@ -1043,7 +1073,7 @@ class DirectoryPicker(QWidget):
     def apply_theme(self):
         self.path_label.setStyleSheet(f"""
             QLabel {{
-                background: {FIELD_COLOR}; color: {FIELD_TEXT_COLOR};
+                background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 20px; padding: 13px 14px;
                 font-size: 13px;

@@ -8,86 +8,90 @@ from .common import *
 THEME_OPTIONS = ("system", "dark", "light")
 DEFAULT_THEME_MODE = "dark"
 
-BRAND_ACCENT_COLOR = "#4CCAFC"
-BRAND_SECONDARY_COLOR = "#5AF2C2"
-BRAND_WARM_COLOR = "#FFB86B"
-DANGER_COLOR = "#F05A6E"
+BRAND_ACCENT_COLOR = "#35D9FF"
+BRAND_SECONDARY_COLOR = "#88FFB8"
+BRAND_PINK_COLOR = "#FF4DDD"
+BRAND_VIOLET_COLOR = "#8E6BFF"
+BRAND_WARM_COLOR = BRAND_PINK_COLOR
+DANGER_COLOR = "#FF5F7E"
 
 THEME_PALETTES = {
     "dark": {
-        "BG_COLOR": "#06131F",
-        "BG_ELEVATED_COLOR": "#081A29",
-        "PANEL_COLOR": "#0B2233",
-        "PANEL_ELEVATED_COLOR": "#16364A",
-        "FIELD_COLOR": "#16374A",
-        "FIELD_HOVER_COLOR": "#1B4258",
-        "TEXT_COLOR": "#F8FCFF",
-        "MUTED_TEXT_COLOR": "#B8D4E4",
-        "SUBTLE_TEXT_COLOR": "#85A8BA",
-        "ACCENT_COLOR": "#4CCAFC",
-        "ACCENT_SECONDARY_COLOR": "#5AF2C2",
-        "ACCENT_WARM_COLOR": "#FFB86B",
-        "ACCENT_TEXT_COLOR": "#03131D",
-        "LINE_COLOR": "rgba(90,242,194,0.24)",
-        "SOFT_LINE_COLOR": "rgba(155,224,250,0.25)",
-        "GLASS_COLOR": "rgba(15,48,70,0.72)",
-        "GLASS_STRONG_COLOR": "rgba(20,64,88,0.86)",
-        "MESH_A": "#06131F",
-        "MESH_B": "#0A2740",
-        "MESH_C": "#083B42",
-        "MESH_D": "#132137",
-        "USER_BUBBLE_COLOR": "#4CCAFC",
-        "USER_BUBBLE_BORDER": "rgba(155,224,250,0.55)",
-        "INPUT_GRADIENT_END": "#0D3347",
-        "CARD_GRADIENT_END": "#0E2B3A",
-        "TOP_GRADIENT_A": "#071421",
-        "TOP_GRADIENT_B": "#0B2233",
-        "TOP_GRADIENT_C": "#103240",
-        "MENU_BG_COLOR": "#173548",
-        "BUBBLE_AGENT_END": "#17364A",
-        "BUBBLE_USER_TEXT": "#03131D",
-        "CODE_BG_COLOR": "rgba(0,0,0,0.30)",
-        "HOVER_TINT": "rgba(90,242,194,0.13)",
-        "ACCENT_TINT": "rgba(76,202,252,0.12)",
-        "ACCENT_TINT_STRONG": "rgba(76,202,252,0.24)",
+        "BG_COLOR": "#020412",
+        "BG_ELEVATED_COLOR": "#050A1C",
+        "PANEL_COLOR": "#071126",
+        "PANEL_ELEVATED_COLOR": "#0B1A37",
+        "FIELD_COLOR": "#0D1F3F",
+        "FIELD_HOVER_COLOR": "#112B54",
+        "TEXT_COLOR": "#F8FBFF",
+        "MUTED_TEXT_COLOR": "#BAC8EA",
+        "SUBTLE_TEXT_COLOR": "#8090B8",
+        "ACCENT_COLOR": BRAND_ACCENT_COLOR,
+        "ACCENT_SECONDARY_COLOR": BRAND_SECONDARY_COLOR,
+        "ACCENT_PINK_COLOR": BRAND_PINK_COLOR,
+        "ACCENT_WARM_COLOR": BRAND_PINK_COLOR,
+        "ACCENT_TEXT_COLOR": "#04101C",
+        "LINE_COLOR": "rgba(53,217,255,0.38)",
+        "SOFT_LINE_COLOR": "rgba(142,107,255,0.34)",
+        "GLASS_COLOR": "rgba(8,18,43,0.76)",
+        "GLASS_STRONG_COLOR": "rgba(8,20,48,0.92)",
+        "MESH_A": "#020412",
+        "MESH_B": "#061133",
+        "MESH_C": "#0A2050",
+        "MESH_D": "#160627",
+        "USER_BUBBLE_COLOR": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #35D9FF, stop:0.56 #67F8FF, stop:1 #88FFB8)",
+        "USER_BUBBLE_BORDER": "rgba(136,255,184,0.52)",
+        "INPUT_GRADIENT_END": "#0A2D56",
+        "CARD_GRADIENT_END": "#0A1834",
+        "TOP_GRADIENT_A": "#040819",
+        "TOP_GRADIENT_B": "#081534",
+        "TOP_GRADIENT_C": "#18082A",
+        "MENU_BG_COLOR": "#091833",
+        "BUBBLE_AGENT_END": "#0E1E3F",
+        "BUBBLE_USER_TEXT": "#03101A",
+        "CODE_BG_COLOR": "rgba(1,5,17,0.72)",
+        "HOVER_TINT": "rgba(136,255,184,0.13)",
+        "ACCENT_TINT": "rgba(53,217,255,0.13)",
+        "ACCENT_TINT_STRONG": "rgba(255,77,221,0.20)",
         "FIELD_TEXT_COLOR": "#FFFFFF",
     },
     "light": {
-        "BG_COLOR": "#EAF5F8",
-        "BG_ELEVATED_COLOR": "#F8FCFE",
-        "PANEL_COLOR": "#F1FAFC",
-        "PANEL_ELEVATED_COLOR": "#D9ECF3",
-        "FIELD_COLOR": "#D7EBF2",
-        "FIELD_HOVER_COLOR": "#CBE4EE",
-        "TEXT_COLOR": "#052235",
-        "MUTED_TEXT_COLOR": "#456E82",
-        "SUBTLE_TEXT_COLOR": "#6C8897",
-        "ACCENT_COLOR": "#087CA8",
-        "ACCENT_SECONDARY_COLOR": "#168E76",
-        "ACCENT_WARM_COLOR": "#A96119",
+        "BG_COLOR": "#F4F8FF",
+        "BG_ELEVATED_COLOR": "#FFFFFF",
+        "PANEL_COLOR": "#EDF5FF",
+        "PANEL_ELEVATED_COLOR": "#DDEBFF",
+        "FIELD_COLOR": "#E5F0FF",
+        "FIELD_HOVER_COLOR": "#D7E8FF",
+        "TEXT_COLOR": "#06162C",
+        "MUTED_TEXT_COLOR": "#3F5579",
+        "SUBTLE_TEXT_COLOR": "#6C7896",
+        "ACCENT_COLOR": "#006D9B",
+        "ACCENT_SECONDARY_COLOR": "#057D5D",
+        "ACCENT_PINK_COLOR": "#B3198E",
+        "ACCENT_WARM_COLOR": "#B3198E",
         "ACCENT_TEXT_COLOR": "#FFFFFF",
-        "LINE_COLOR": "rgba(8,124,168,0.24)",
-        "SOFT_LINE_COLOR": "rgba(8,88,120,0.24)",
-        "GLASS_COLOR": "rgba(248,252,254,0.76)",
-        "GLASS_STRONG_COLOR": "rgba(245,251,253,0.92)",
-        "MESH_A": "#EAF5F8",
-        "MESH_B": "#DDF2F8",
-        "MESH_C": "#DFF5EE",
-        "MESH_D": "#E9ECFA",
-        "USER_BUBBLE_COLOR": "#4CCAFC",
-        "USER_BUBBLE_BORDER": "rgba(8,124,168,0.28)",
-        "INPUT_GRADIENT_END": "#CFE7EF",
-        "CARD_GRADIENT_END": "#E6F5F0",
-        "TOP_GRADIENT_A": "#DCEFF7",
-        "TOP_GRADIENT_B": "#EAF5F8",
-        "TOP_GRADIENT_C": "#DFF4EA",
-        "MENU_BG_COLOR": "#E7F4F8",
-        "BUBBLE_AGENT_END": "#DFEFF5",
-        "BUBBLE_USER_TEXT": "#03131D",
-        "CODE_BG_COLOR": "rgba(6,32,51,0.08)",
-        "HOVER_TINT": "rgba(22,142,118,0.10)",
-        "ACCENT_TINT": "rgba(8,124,168,0.12)",
-        "ACCENT_TINT_STRONG": "rgba(8,124,168,0.22)",
+        "LINE_COLOR": "rgba(0,109,155,0.30)",
+        "SOFT_LINE_COLOR": "rgba(142,107,255,0.26)",
+        "GLASS_COLOR": "rgba(255,255,255,0.82)",
+        "GLASS_STRONG_COLOR": "rgba(255,255,255,0.94)",
+        "MESH_A": "#F4F8FF",
+        "MESH_B": "#E9F4FF",
+        "MESH_C": "#EAF7F1",
+        "MESH_D": "#F7EFFF",
+        "USER_BUBBLE_COLOR": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #007FB2, stop:1 #057D5D)",
+        "USER_BUBBLE_BORDER": "rgba(0,109,155,0.34)",
+        "INPUT_GRADIENT_END": "#D7E8FF",
+        "CARD_GRADIENT_END": "#F5F8FF",
+        "TOP_GRADIENT_A": "#FDFEFF",
+        "TOP_GRADIENT_B": "#EEF6FF",
+        "TOP_GRADIENT_C": "#F8EEFF",
+        "MENU_BG_COLOR": "#FFFFFF",
+        "BUBBLE_AGENT_END": "#F8FBFF",
+        "BUBBLE_USER_TEXT": "#FFFFFF",
+        "CODE_BG_COLOR": "rgba(6,22,44,0.08)",
+        "HOVER_TINT": "rgba(5,125,93,0.10)",
+        "ACCENT_TINT": "rgba(0,109,155,0.12)",
+        "ACCENT_TINT_STRONG": "rgba(179,25,142,0.15)",
         "FIELD_TEXT_COLOR": "#062033",
     },
 }
@@ -97,7 +101,7 @@ THEME_EXPORT_NAMES = (
     "BG_COLOR", "BG_ELEVATED_COLOR", "PANEL_COLOR", "PANEL_ELEVATED_COLOR",
     "FIELD_COLOR", "FIELD_HOVER_COLOR", "TEXT_COLOR", "MUTED_TEXT_COLOR",
     "SUBTLE_TEXT_COLOR", "ACCENT_COLOR", "ACCENT_SECONDARY_COLOR",
-    "ACCENT_WARM_COLOR", "ACCENT_TEXT_COLOR", "LINE_COLOR", "SOFT_LINE_COLOR",
+    "ACCENT_PINK_COLOR", "ACCENT_WARM_COLOR", "ACCENT_TEXT_COLOR", "LINE_COLOR", "SOFT_LINE_COLOR",
     "INPUT_GRADIENT_END", "CARD_GRADIENT_END", "TOP_GRADIENT_A",
     "TOP_GRADIENT_B", "TOP_GRADIENT_C", "MENU_BG_COLOR", "BUBBLE_AGENT_END",
     "GLASS_COLOR", "GLASS_STRONG_COLOR", "MESH_A", "MESH_B", "MESH_C",
@@ -200,6 +204,27 @@ def themed_icon(*names):
     return QIcon()
 
 
+def qcolor_from_css(value, fallback="#000000", alpha=None):
+    text = str(value or "").strip()
+    match = re.fullmatch(r"rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)", text)
+    if match:
+        r, g, b = [max(0, min(255, int(float(part)))) for part in match.group(1, 2, 3)]
+        raw_alpha = match.group(4)
+        if raw_alpha is None:
+            a = 255
+        else:
+            parsed = float(raw_alpha)
+            a = int(max(0.0, min(1.0, parsed)) * 255) if parsed <= 1 else max(0, min(255, int(parsed)))
+        color = QColor(r, g, b, a)
+    else:
+        color = QColor(text)
+        if not color.isValid():
+            color = QColor(fallback)
+    if alpha is not None:
+        color.setAlpha(max(0, min(255, int(alpha))))
+    return color
+
+
 def set_themed_button_icon(button, names, fallback_text="", icon_size=20, clear_text=True):
     if isinstance(names, str):
         names = (names,)
@@ -274,7 +299,7 @@ def _refresh_theme_exports(mode=None, settings=None):
     global BG_COLOR, BG_ELEVATED_COLOR, PANEL_COLOR, PANEL_ELEVATED_COLOR
     global FIELD_COLOR, FIELD_HOVER_COLOR, TEXT_COLOR, MUTED_TEXT_COLOR
     global SUBTLE_TEXT_COLOR, ACCENT_COLOR, ACCENT_SECONDARY_COLOR
-    global ACCENT_WARM_COLOR, ACCENT_TEXT_COLOR, LINE_COLOR, SOFT_LINE_COLOR
+    global ACCENT_PINK_COLOR, ACCENT_WARM_COLOR, ACCENT_TEXT_COLOR, LINE_COLOR, SOFT_LINE_COLOR
     global INPUT_GRADIENT_END, CARD_GRADIENT_END, TOP_GRADIENT_A
     global TOP_GRADIENT_B, TOP_GRADIENT_C, MENU_BG_COLOR, BUBBLE_AGENT_END
     global GLASS_COLOR, GLASS_STRONG_COLOR, MESH_A, MESH_B, MESH_C, MESH_D
@@ -297,18 +322,17 @@ def _refresh_theme_exports(mode=None, settings=None):
     palette = THEME_PALETTES[CURRENT_THEME]
     globals().update(palette)
 
-    svg_color = ACCENT_COLOR
     CHECKMARK_SVG_PATH = _svg_asset(
         f"checkmark_{CURRENT_THEME}.svg",
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{svg_color}" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L19 7"/></svg>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{ACCENT_TEXT_COLOR}" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L19 7"/></svg>'
     )
     DROPDOWN_SVG_PATH = _svg_asset(
         f"dropdown_{CURRENT_THEME}.svg",
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{svg_color}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{ACCENT_COLOR}" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
     )
     RESET_SVG_PATH = _svg_asset(
         f"reset_{CURRENT_THEME}.svg",
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{svg_color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{ACCENT_COLOR}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>'
     )
 
     CHECKBOX_CSS = f"""
@@ -317,12 +341,28 @@ def _refresh_theme_exports(mode=None, settings=None):
             padding: 6px 2px; background: transparent;
         }}
         QCheckBox:disabled {{ color: {SUBTLE_TEXT_COLOR}; }}
+        QCheckBox::indicator {{
+            width: 22px; height: 22px;
+            border-radius: 11px;
+            border: 1px solid {SOFT_LINE_COLOR};
+            background: {GLASS_COLOR};
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {LINE_COLOR};
+            background: {FIELD_HOVER_COLOR};
+        }}
+        QCheckBox::indicator:checked {{
+            image: url("{CHECKMARK_SVG_PATH}");
+            border-color: {ACCENT_COLOR};
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+        }}
     """
 
     COMBOBOX_CSS = f"""
         QComboBox {{
             background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
-            border-radius: 22px; padding: 13px 16px 13px 46px; font-size: 14px;
+            border-radius: 20px; padding: 13px 16px 13px 46px; font-size: 14px;
             border: 1px solid {SOFT_LINE_COLOR};
             min-height: 26px;
             selection-background-color: {ACCENT_TINT_STRONG};
@@ -334,7 +374,7 @@ def _refresh_theme_exports(mode=None, settings=None):
         }}
         QComboBox:focus {{
             background: {FIELD_HOVER_COLOR};
-            border-color: {ACCENT_COLOR};
+            border-color: {ACCENT_PINK_COLOR};
         }}
         QComboBox::drop-down {{
             subcontrol-origin: padding; subcontrol-position: center left;
@@ -347,7 +387,7 @@ def _refresh_theme_exports(mode=None, settings=None):
         }}
         QComboBox QAbstractItemView {{
             background: {MENU_BG_COLOR}; color: {TEXT_COLOR};
-            selection-background-color: {ACCENT_COLOR}; selection-color: {ACCENT_TEXT_COLOR};
+            selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; outline: 0px;
             padding: 8px;
         }}
@@ -356,14 +396,14 @@ def _refresh_theme_exports(mode=None, settings=None):
     LINE_EDIT_CSS = f"""
         QLineEdit {{
             background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
-            border-radius: 22px; padding: 13px 16px;
+            border-radius: 20px; padding: 13px 16px;
             border: 1px solid {SOFT_LINE_COLOR};
             font-size: 14px;
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
         }}
         QLineEdit:hover {{ background: {FIELD_HOVER_COLOR}; border-color: {LINE_COLOR}; }}
-        QLineEdit:focus {{ background: {FIELD_HOVER_COLOR}; border-color: {ACCENT_COLOR}; }}
+        QLineEdit:focus {{ background: {FIELD_HOVER_COLOR}; border-color: {ACCENT_PINK_COLOR}; }}
         QLineEdit:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: {PANEL_ELEVATED_COLOR}; }}
     """
 
@@ -371,24 +411,25 @@ def _refresh_theme_exports(mode=None, settings=None):
         QTextEdit {{
             background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 22px; padding: 13px;
+            border-radius: 20px; padding: 13px;
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
         }}
-        QTextEdit:focus {{ background: {FIELD_HOVER_COLOR}; border-color: {ACCENT_COLOR}; }}
+        QTextEdit:focus {{ background: {FIELD_HOVER_COLOR}; border-color: {ACCENT_PINK_COLOR}; }}
         QTextEdit viewport {{ background: transparent; color: {FIELD_TEXT_COLOR}; }}
     """
 
     PRIMARY_BUTTON_CSS = f"""
         QPushButton {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
             color: {ACCENT_TEXT_COLOR}; font-weight: 700;
-            padding: 14px 22px; border-radius: 22px; font-size: 15px; border: none;
+            padding: 14px 22px; border-radius: 22px; font-size: 15px;
+            border: 1px solid rgba(255,255,255,0.18);
         }}
         QPushButton:hover {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
+                stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
         }}
         QPushButton:pressed {{ background: {ACCENT_COLOR}; padding-top: 15px; padding-bottom: 13px; }}
         QPushButton:disabled {{ background: {PANEL_ELEVATED_COLOR}; color: {SUBTLE_TEXT_COLOR}; }}
@@ -397,23 +438,28 @@ def _refresh_theme_exports(mode=None, settings=None):
     SECONDARY_BUTTON_CSS = f"""
         QPushButton {{
             background-color: {ACCENT_TINT}; color: {TEXT_COLOR};
-            border: none; border-radius: 20px;
+            border: 1px solid {SOFT_LINE_COLOR}; border-radius: 20px;
             padding: 11px 17px; font-size: 13px; font-weight: 700;
         }}
-        QPushButton:hover {{ background-color: {HOVER_TINT}; }}
-        QPushButton:pressed {{ background-color: {ACCENT_TINT_STRONG}; }}
-        QPushButton:checked {{ background-color: {ACCENT_COLOR}; color: {ACCENT_TEXT_COLOR}; }}
-        QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: transparent; }}
+        QPushButton:hover {{ background-color: {HOVER_TINT}; border-color: {LINE_COLOR}; }}
+        QPushButton:pressed {{ background-color: {ACCENT_TINT_STRONG}; border-color: {ACCENT_PINK_COLOR}; }}
+        QPushButton:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+            color: {ACCENT_TEXT_COLOR};
+            border-color: {ACCENT_COLOR};
+        }}
+        QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: transparent; border-color: transparent; }}
     """
 
     DANGER_BUTTON_CSS = f"""
         QPushButton {{
             background-color: rgba(240,90,110,0.13); color: {DANGER_COLOR};
-            border: none;
+            border: 1px solid rgba(255,95,126,0.30);
             border-radius: 20px; padding: 11px 17px; font-weight: 700;
         }}
-        QPushButton:hover {{ background-color: rgba(240,90,110,0.20); }}
-        QPushButton:pressed {{ background-color: rgba(240,90,110,0.28); }}
+        QPushButton:hover {{ background-color: rgba(255,95,126,0.20); border-color: rgba(255,95,126,0.44); }}
+        QPushButton:pressed {{ background-color: rgba(255,95,126,0.28); }}
     """
 
     NAV_CARD_CSS = f"""
@@ -422,11 +468,12 @@ def _refresh_theme_exports(mode=None, settings=None):
                 stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END});
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 24px;
+            border-radius: 22px;
         }}
         QFrame#SettingsNavCard:hover {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 {PANEL_ELEVATED_COLOR}, stop:1 {FIELD_HOVER_COLOR});
+            border-color: {LINE_COLOR};
         }}
     """
 
@@ -464,7 +511,7 @@ def _refresh_theme_exports(mode=None, settings=None):
         }}
         QSlider::sub-page:horizontal {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                stop:0 {ACCENT_COLOR}, stop:0.56 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
             border-radius: 16px;
         }}
         QSlider::add-page:horizontal {{
@@ -485,7 +532,7 @@ def _refresh_theme_exports(mode=None, settings=None):
         QTextEdit {{
             background: {FIELD_COLOR}; color: {FIELD_TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 22px; padding: 12px;
+            border-radius: 20px; padding: 12px;
             font-family: Consolas, 'Courier New';
             font-size: 12px;
             selection-background-color: {ACCENT_TINT_STRONG};
@@ -559,7 +606,7 @@ def application_stylesheet():
         QToolTip {{
             background: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
-            border: none;
+            border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 14px;
             padding: 6px 8px;
             font-size: 12px;
@@ -567,8 +614,8 @@ def application_stylesheet():
         QMenu {{
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
-            border: none;
-            border-radius: 20px;
+            border: 1px solid {SOFT_LINE_COLOR};
+            border-radius: 18px;
             font-family: 'Segoe UI';
             font-size: 14px;
             padding: 7px;
@@ -585,16 +632,22 @@ def application_stylesheet():
             background-color: {ACCENT_TINT_STRONG};
             color: {TEXT_COLOR};
         }}
+        QMenu::separator {{
+            height: 1px;
+            background: {SOFT_LINE_COLOR};
+            margin: 7px 10px;
+        }}
         QDialogButtonBox QPushButton {{
             background-color: {ACCENT_TINT};
             color: {TEXT_COLOR};
-            border: none;
+            border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 20px;
             padding: 10px 16px;
             font-weight: 700;
         }}
         QDialogButtonBox QPushButton:hover {{
             background-color: {HOVER_TINT};
+            border-color: {LINE_COLOR};
         }}
     """
 
@@ -615,8 +668,8 @@ def menu_stylesheet():
         QMenu {{
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
-            border: none;
-            border-radius: 20px;
+            border: 1px solid {SOFT_LINE_COLOR};
+            border-radius: 18px;
             font-family: 'Segoe UI';
             font-size: 14px;
             padding: 7px;
@@ -624,6 +677,7 @@ def menu_stylesheet():
         QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 14px; min-width: 118px; }}
         QMenu::icon {{ padding-right: 4px; }}
         QMenu::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}
+        QMenu::separator {{ height: 1px; background: {SOFT_LINE_COLOR}; margin: 7px 10px; }}
     """
 
 
@@ -640,7 +694,7 @@ def muted_label_css(size=12):
 
 
 def card_css(padding=14, radius=8):
-    radius = max(22, int(radius))
+    radius = max(20, int(radius))
     return f"""
         QFrame {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -661,15 +715,15 @@ def icon_button_css(size=48, danger=False):
     return f"""
         QPushButton {{
             background-color: transparent;
-            border: none;
+            border: 1px solid transparent;
             border-radius: {radius}px;
             padding: 0px;
             color: {color};
             font-size: 20px;
             font-weight: 700;
         }}
-        QPushButton:hover {{ background-color: {hover}; }}
-        QPushButton:pressed {{ background-color: {tint}; }}
+        QPushButton:hover {{ background-color: {hover}; border-color: {SOFT_LINE_COLOR}; }}
+        QPushButton:pressed {{ background-color: {tint}; border-color: {LINE_COLOR}; }}
         QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; }}
     """
 
@@ -678,21 +732,21 @@ def ghost_button_css():
     return f"""
         QPushButton {{
             background: transparent;
-            border: none;
+            border: 1px solid transparent;
             color: {TEXT_COLOR};
             border-radius: 20px;
             padding: 10px 14px;
             font-weight: 700;
         }}
-        QPushButton:hover {{ background: {ACCENT_TINT}; }}
-        QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}
+        QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}
+        QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}
     """
 
 
 def segmented_control_css():
     return f"""
         QWidget#SegmentedControl {{
-            background: {ACCENT_TINT};
+            background: {GLASS_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 24px;
         }}
@@ -711,7 +765,7 @@ def segmented_control_css():
         }}
         QPushButton:checked {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                stop:0 {ACCENT_COLOR}, stop:0.58 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
             color: {ACCENT_TEXT_COLOR};
         }}
     """

@@ -192,7 +192,7 @@ class LegalAgreementDialog(QDialog):
                 background: transparent;
             }}
             QTextBrowser#LegalDocument {{
-                background: {FIELD_COLOR};
+                background: {GLASS_COLOR};
                 color: {FIELD_TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 14px;
@@ -201,7 +201,7 @@ class LegalAgreementDialog(QDialog):
                 line-height: 1.45;
             }}
             QTextBrowser#LegalDocument viewport {{
-                background: {FIELD_COLOR};
+                background: transparent;
                 color: {FIELD_TEXT_COLOR};
             }}
             QCheckBox#LegalConfirmCheck {{
@@ -212,9 +212,9 @@ class LegalAgreementDialog(QDialog):
             }}
             QPushButton#LegalAgreeButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+                    stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
                 color: {ACCENT_TEXT_COLOR};
-                border: none;
+                border: 1px solid rgba(255,255,255,0.18);
                 border-radius: 22px;
                 padding: 14px 22px;
                 font-size: 15px;
@@ -223,7 +223,7 @@ class LegalAgreementDialog(QDialog):
             }}
             QPushButton#LegalAgreeButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
+                    stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
             }}
             QPushButton#LegalAgreeButton:pressed {{
                 background: {ACCENT_COLOR};
@@ -237,7 +237,7 @@ class LegalAgreementDialog(QDialog):
             QPushButton#LegalDeclineButton {{
                 background-color: {ACCENT_TINT};
                 color: {TEXT_COLOR};
-                border: none;
+                border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 20px;
                 padding: 11px 17px;
                 font-size: 13px;
@@ -246,6 +246,7 @@ class LegalAgreementDialog(QDialog):
             }}
             QPushButton#LegalDeclineButton:hover {{
                 background-color: {HOVER_TINT};
+                border-color: {LINE_COLOR};
             }}
             QPushButton#LegalDeclineButton:pressed {{
                 background-color: {ACCENT_TINT_STRONG};

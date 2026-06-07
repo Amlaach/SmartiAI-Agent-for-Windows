@@ -1,5 +1,7 @@
 """Windows toast notifications and polished in-app fallback popups."""
 from .common import *
+from .ui_styles import *
+from .ui_controls import apply_soft_shadow
 
 try:
     import winreg
@@ -227,18 +229,18 @@ class SmartiGlassToast(QWidget):
 
     def _stylesheet(self):
         if CURRENT_THEME == "dark":
-            glass = "rgba(31, 36, 44, 218)"
-            line = "rgba(255, 255, 255, 42)"
-            field = "rgba(255, 255, 255, 28)"
+            glass = GLASS_STRONG_COLOR
+            line = SOFT_LINE_COLOR
+            field = GLASS_COLOR
         else:
-            glass = "rgba(255, 255, 255, 226)"
-            line = "rgba(47, 63, 78, 38)"
-            field = "rgba(255, 255, 255, 188)"
+            glass = GLASS_STRONG_COLOR
+            line = SOFT_LINE_COLOR
+            field = GLASS_COLOR
         return f"""
             QFrame#SmartiGlassToastCard {{
                 background: {glass};
                 border: 1px solid {line};
-                border-radius: 18px;
+                border-radius: 20px;
             }}
             QLabel {{
                 background: transparent;
@@ -262,7 +264,7 @@ class SmartiGlassToast(QWidget):
                 line-height: 1.35;
             }}
             QLabel#SmartiGlassBodyIcon {{
-                background: rgba(255, 255, 255, 70);
+                background: {ACCENT_TINT};
                 border: 1px solid {line};
                 border-radius: 16px;
             }}
@@ -275,6 +277,10 @@ class SmartiGlassToast(QWidget):
                 font-size: 13px;
                 selection-background-color: {ACCENT_TINT_STRONG};
             }}
+            QLineEdit#SmartiGlassReply:focus {{
+                background: {FIELD_HOVER_COLOR};
+                border-color: {ACCENT_PINK_COLOR};
+            }}
             QPushButton {{
                 font-family: 'Segoe UI', Arial;
                 border: 1px solid transparent;
@@ -283,11 +289,13 @@ class SmartiGlassToast(QWidget):
                 font-weight: 800;
             }}
             QPushButton#SmartiGlassPrimary {{
-                background: {ACCENT_COLOR};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
                 color: {ACCENT_TEXT_COLOR};
             }}
             QPushButton#SmartiGlassPrimary:hover {{
-                background: {ACCENT_SECONDARY_COLOR};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});
             }}
             QPushButton#SmartiGlassReject {{
                 background: {field};
