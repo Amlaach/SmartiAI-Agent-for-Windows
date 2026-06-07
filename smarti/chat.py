@@ -1006,9 +1006,18 @@ class MessageBubble(QFrame):
         self.apply_theme()
 
     def _link_color(self):
+        if CURRENT_THEME == "light":
+            return "#006DCC"
         if self.is_user:
             return BUBBLE_USER_TEXT
-        return "#FFF2A8" if CURRENT_THEME == "dark" else "#004E66"
+        return "#FFF2A8"
+
+    def _apply_link_palette(self, label):
+        link_color = QColor(self._link_color())
+        palette = label.palette()
+        palette.setColor(QPalette.ColorRole.Link, link_color)
+        palette.setColor(QPalette.ColorRole.LinkVisited, link_color)
+        label.setPalette(palette)
 
     def apply_theme(self):
         bg = (
@@ -1030,6 +1039,8 @@ class MessageBubble(QFrame):
             f"color: {MUTED_TEXT_COLOR}; font-size: 13px; background: {ACCENT_TINT}; "
             f"padding: 10px; border: none; border-radius: 10px;"
         )
+        for label in self.findChildren(QLabel):
+            self._apply_link_palette(label)
         self.setStyleSheet(
             f"MessageBubble {{ background: {bg}; border: {border}; border-radius: {radius}; margin: 5px 0px; }}"
             f"QLabel {{ color: {color}; font-size: 15px; font-family: 'Segoe UI', Arial; background: transparent; }}"
@@ -1107,6 +1118,7 @@ class MessageBubble(QFrame):
         label.linkActivated.connect(self._handle_link_activated)
         label.setMaximumWidth(self.max_w)
         label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._apply_link_palette(label)
         if not str(rendered_html or "").lstrip().startswith("<"):
             rendered_html = f"<span>{rendered_html}</span>"
         label.setText(rendered_html)

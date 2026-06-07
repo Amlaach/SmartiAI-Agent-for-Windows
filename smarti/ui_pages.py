@@ -20,7 +20,7 @@ def create_back_button(target_page_func):
     return btn
 
 def high_contrast_link_color():
-    return "#FFF2A8" if CURRENT_THEME == "dark" else "#004E66"
+    return "#FFF2A8" if CURRENT_THEME == "dark" else "#006DCC"
 
 def high_contrast_link_markup(url, text):
     color = high_contrast_link_color()

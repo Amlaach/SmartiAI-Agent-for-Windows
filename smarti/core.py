@@ -43,6 +43,7 @@ class SmartiCore:
         self._background_lock = threading.RLock()
         self._active_process_lock = threading.RLock()
         self._tool_context_lock = threading.RLock()
+        self._task_checkpoint_lock = threading.RLock()
         self._active_processes = set()
         self._foreground_cancel_event = None
         self.cancel_event = threading.Event()
@@ -2763,6 +2764,52 @@ class SmartiCore:
     def _request_post(self, url, **kwargs):
         return requests.post(url, **self._with_ssl_request_kwargs(kwargs))
 
+    def _network_auto_resume_enabled(self):
+        return bool(self.settings.get("network_auto_resume_enabled", True))
+
+    def _network_probe_available(self):
+        probe_urls = (
+            "https://www.gstatic.com/generate_204",
+            "https://api.github.com",
+        )
+        for url in probe_urls:
+            try:
+                response = self._request_get(url, timeout=5)
+                if getattr(response, "status_code", 599) < 500:
+                    return True
+            except requests.exceptions.SSLError:
+                return True
+            except Exception:
+                pass
+        try:
+            with socket.create_connection(("1.1.1.1", 53), timeout=3):
+                return True
+        except Exception:
+            return False
+
+    def _wait_for_network_reconnect(self, analysis=None):
+        if not self._network_auto_resume_enabled():
+            return False
+        try:
+            minutes = int(self.settings.get("network_reconnect_wait_minutes", 180) or 180)
+        except Exception:
+            minutes = 180
+        max_wait = max(1, minutes) * 60
+        deadline = time.time() + max_wait
+        label = getattr(analysis, "provider_label", "") or self._provider_display_name(getattr(self, "mode", ""))
+        while time.time() < deadline:
+            self._raise_if_cancelled()
+            if self._network_probe_available():
+                if self.status_callback:
+                    self.status_callback(f"{label}: החיבור חזר, ממשיך אוטומטית...")
+                return True
+            remaining_minutes = max(1, int((deadline - time.time() + 59) // 60))
+            if self.status_callback:
+                self.status_callback(f"{label}: החיבור לרשת נותק. ממתין לחיבור מחדש ({remaining_minutes} דק׳)...")
+            if not self._sleep_with_cancel(10):
+                raise SmartiCancelled("CANCELLED_BY_USER")
+        return False
+
     def _friendly_ssl_error(self, error):
         if self._allow_insecure_ssl():
             return (
@@ -3123,8 +3170,27 @@ class SmartiCore:
         self._resume_background_tasks()
 
     def _resume_background_tasks(self):
+        changed = False
+        with self._background_lock:
+            for task in self.settings.get("background_tasks", []):
+                if task.get("status") in {"running", "cancelling"}:
+                    task["status"] = "scheduled"
+                    task["run_at"] = (datetime.now() + timedelta(minutes=1)).isoformat(timespec="seconds")
+                    task["generation"] = int(task.get("generation", 0) or 0) + 1
+                    task["recovered_at"] = datetime.now().isoformat(timespec="seconds")
+                    task.setdefault("history", []).append({
+                        "time": datetime.now().isoformat(timespec="seconds"),
+                        "status": "scheduled",
+                        "result": "Recovered after Smarti closed while the task was running.",
+                    })
+                    task["history"] = task["history"][-20:]
+                    changed = True
+        if changed:
+            self.settings["background_jobs"] = self.settings.get("background_tasks", [])
+            self._save_settings()
         for task in list(self.settings.get("background_tasks", [])):
-            if task.get("status") == "scheduled": self._schedule_background_task_thread(task)
+            if task.get("status") == "scheduled":
+                self._schedule_background_task_thread(task)
 
     def _mark_background_task(self, task_id, status, result=None):
         changed = False
@@ -4245,6 +4311,178 @@ class SmartiCore:
             "conversation_attachments": copy.deepcopy(getattr(self, "conversation_attachments", [])),
         }
 
+    def _task_checkpoint_enabled(self):
+        return bool(self.settings.get("active_task_checkpoint_enabled", True))
+
+    def _json_safe_checkpoint_value(self, value):
+        if isinstance(value, set):
+            return sorted(str(item) for item in value)
+        if isinstance(value, tuple):
+            return [self._json_safe_checkpoint_value(item) for item in value]
+        if isinstance(value, list):
+            return [self._json_safe_checkpoint_value(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): self._json_safe_checkpoint_value(item) for key, item in value.items()}
+        try:
+            json.dumps(value)
+            return copy.deepcopy(value)
+        except Exception:
+            return str(value)
+
+    def _read_task_checkpoint_unlocked(self):
+        if not os.path.exists(ACTIVE_TASK_CHECKPOINT_FILE):
+            return None
+        with open(ACTIVE_TASK_CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return None
+        if payload.get("status") not in {"running", "paused_network", "interrupted"}:
+            return None
+        return payload
+
+    def _load_task_checkpoint(self):
+        if not self._task_checkpoint_enabled():
+            return None
+        lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
+        self._task_checkpoint_lock = lock
+        with lock:
+            try:
+                return self._read_task_checkpoint_unlocked()
+            except Exception as e:
+                logging.warning(f"Task checkpoint load failed: {e}")
+                return None
+
+    def _write_task_checkpoint(self, payload):
+        if not self._task_checkpoint_enabled():
+            return False
+        lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
+        self._task_checkpoint_lock = lock
+        with lock:
+            try:
+                os.makedirs(os.path.dirname(ACTIVE_TASK_CHECKPOINT_FILE), exist_ok=True)
+                tmp_path = ACTIVE_TASK_CHECKPOINT_FILE + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, ACTIVE_TASK_CHECKPOINT_FILE)
+                return True
+            except Exception as e:
+                logging.warning(f"Task checkpoint save failed: {e}")
+                return False
+
+    def _clear_task_checkpoint(self, task_id=None):
+        lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
+        self._task_checkpoint_lock = lock
+        with lock:
+            try:
+                if task_id and os.path.exists(ACTIVE_TASK_CHECKPOINT_FILE):
+                    current = self._read_task_checkpoint_unlocked()
+                    if current and str(current.get("task_id") or "") != str(task_id):
+                        return False
+                if os.path.exists(ACTIVE_TASK_CHECKPOINT_FILE):
+                    os.remove(ACTIVE_TASK_CHECKPOINT_FILE)
+                tmp_path = ACTIVE_TASK_CHECKPOINT_FILE + ".tmp"
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                return True
+            except Exception as e:
+                logging.warning(f"Task checkpoint clear failed: {e}")
+                return False
+
+    def _is_resume_request(self, text):
+        normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not normalized or len(normalized) > 120:
+            return False
+        exact = {
+            "continue", "continue task", "resume", "resume task", "resume last task",
+            "keep going", "pick up where you left off",
+            "המשך", "תמשיך", "תמשיכי", "להמשיך", "המשך משימה", "המשך את המשימה",
+            "תמשיך מהנקודה האחרונה", "המשך מהנקודה האחרונה", "תמשיך מאותה נקודה",
+        }
+        if normalized in exact:
+            return True
+        prefixes = (
+            "continue from", "resume from", "pick up",
+            "המשך מ", "תמשיך מ", "תמשיכי מ", "להמשיך מ",
+        )
+        return normalized.startswith(prefixes)
+
+    def _restore_task_checkpoint_context(self, checkpoint):
+        if not isinstance(checkpoint, dict):
+            return
+        mode = normalize_provider_name(checkpoint.get("mode", ""))
+        if mode in MODEL_PROVIDER_ORDER:
+            if mode != normalize_provider_name(self.settings.get("api_mode", "")):
+                self.settings["api_mode"] = mode
+            if mode != normalize_provider_name(getattr(self, "mode", "")):
+                self.setup_model()
+        context = checkpoint.get("context") if isinstance(checkpoint.get("context"), dict) else {}
+        self.settings["conversation_summary"] = str(context.get("conversation_summary", "") or "")
+        transcript = context.get("tool_context_transcript", [])
+        self.settings["tool_context_transcript"] = copy.deepcopy(transcript if isinstance(transcript, list) else [])
+        self.recent_tool_observations = copy.deepcopy(context.get("recent_tool_observations", []) if isinstance(context.get("recent_tool_observations", []), list) else [])
+        self.tool_observations = copy.deepcopy(context.get("tool_observations", []) if isinstance(context.get("tool_observations", []), list) else [])
+        self.conversation_attachments = normalize_attachments(context.get("conversation_attachments", []) if isinstance(context.get("conversation_attachments", []), list) else [])
+        self.system_prompt = str(checkpoint.get("system_prompt") or context.get("system_prompt") or self._load_system_prompt())
+        if getattr(self, "mode", "") == "gemini":
+            history = context.get("gemini_history", [])
+            self.gemini_history = copy.deepcopy(history if isinstance(history, list) else [])
+        else:
+            history = context.get("universal_history", [])
+            history = copy.deepcopy(history if isinstance(history, list) else [])
+            history = [message for message in history if isinstance(message, dict) and message.get("role") != "system"]
+            history.insert(0, {"role": "system", "content": self.system_prompt})
+            self.universal_history = history
+
+    def _save_active_task_checkpoint(
+        self,
+        *,
+        user_text,
+        history_user_text,
+        attachments,
+        current_messages,
+        iteration,
+        task_state,
+        tool_call_counts,
+        similar_tool_signatures,
+        schemas_seen,
+        internal_artifact_replies,
+        current_model,
+        tool_observation_start,
+        phase,
+        status="running",
+        reason="",
+        is_background_task=False,
+    ):
+        if is_background_task or not self._task_checkpoint_enabled():
+            return False
+        now = datetime.now().isoformat(timespec="seconds")
+        existing = self._load_task_checkpoint() or {}
+        payload = {
+            "schema_version": 1,
+            "status": status,
+            "phase": str(phase or "running"),
+            "reason": str(reason or ""),
+            "task_id": str(getattr(self._execution_context, "current_task_id", "") or uuid.uuid4().hex[:12]),
+            "created_at": existing.get("created_at") or now,
+            "updated_at": now,
+            "mode": getattr(self, "mode", ""),
+            "current_model": str(current_model or ""),
+            "user_text": str(user_text or ""),
+            "history_user_text": str(history_user_text or ""),
+            "attachments": normalize_attachments(attachments or []),
+            "current_messages": self._json_safe_checkpoint_value(current_messages or []),
+            "iteration": int(iteration or 0),
+            "tool_observation_start": int(tool_observation_start or 0),
+            "tool_call_counts": self._json_safe_checkpoint_value(tool_call_counts or {}),
+            "similar_tool_signatures": self._json_safe_checkpoint_value(similar_tool_signatures or []),
+            "schemas_seen": sorted(str(item) for item in (schemas_seen or [])),
+            "internal_artifact_replies": int(internal_artifact_replies or 0),
+            "task_state": self._json_safe_checkpoint_value(task_state or {}),
+            "context": self._json_safe_checkpoint_value(self._chat_context_snapshot()),
+            "system_prompt": getattr(self, "system_prompt", ""),
+        }
+        return self._write_task_checkpoint(payload)
+
     def _restore_active_chat_context(self):
         store = getattr(self, "chat_store", None)
         if not store:
@@ -5089,6 +5327,7 @@ CWD: {current_dir}
         immediate_retries = 0
         wait_times = [15, 30, 30] if retry_wait_times is None else list(retry_wait_times)
         max_retries = len(wait_times)
+        network_reconnect_allowed = retry_wait_times is None
         while retries <= max_retries:
             try:
                 self._raise_if_cancelled()
@@ -5162,6 +5401,22 @@ CWD: {current_dir}
                     if isinstance(e, requests.exceptions.SSLError):
                         analysis.user_message = self._friendly_ssl_error(e)
                         analysis.retry_action = "none"
+                if (
+                    network_reconnect_allowed
+                    and self._network_auto_resume_enabled()
+                    and normalize_provider_name(getattr(self, "mode", "")) != "local"
+                    and analysis.category in {"network", "timeout"}
+                ):
+                    try:
+                        network_down = not self._network_probe_available()
+                    except Exception:
+                        network_down = False
+                    if network_down:
+                        if self._wait_for_network_reconnect(analysis):
+                            retries = 0
+                            immediate_retries = 0
+                            continue
+                        raise ApiRequestError(api_retry_exhausted_analysis(analysis))
                 if analysis.retry_action == "immediate" and immediate_retries < 1:
                     immediate_retries += 1
                     if self.status_callback:
@@ -5540,20 +5795,35 @@ CWD: {current_dir}
         chat_turn_recorded = False
         current_model = ""
         task_state = None
+        resume_checkpoint = None
+        checkpoint_should_keep = False
+        checkpoint_task_id = ""
         try:
             user_text = str(user_text or "")
             attachments = normalize_attachments(attachments or [])
+            if not is_background_task and not attachments and self._is_resume_request(user_text):
+                resume_checkpoint = self._load_task_checkpoint()
+                if resume_checkpoint:
+                    if self.status_callback:
+                        self.status_callback("ממשיך מהנקודה האחרונה שנשמרה...")
+                    self._restore_task_checkpoint_context(resume_checkpoint)
+                    user_text = str(resume_checkpoint.get("user_text") or user_text)
+                    attachments = normalize_attachments(resume_checkpoint.get("attachments") or [])
             if attachments:
                 self.conversation_attachments = merge_conversation_attachments(
                     getattr(self, "conversation_attachments", []),
                     attachments,
                     self.settings.get("conversation_attachments_limit", 80),
                 )
-            current_manifest = attachment_manifest_text(attachments, title="Files attached to this turn")
-            history_user_text = (user_text + ("\n\n" + current_manifest if current_manifest else "")).strip()
+            if resume_checkpoint:
+                history_user_text = str(resume_checkpoint.get("history_user_text") or user_text).strip()
+            else:
+                current_manifest = attachment_manifest_text(attachments, title="Files attached to this turn")
+                history_user_text = (user_text + ("\n\n" + current_manifest if current_manifest else "")).strip()
             self._execution_context.is_background = is_background_task
             self._execution_context.cancel_event = run_cancel_event
-            self._execution_context.current_task_id = uuid.uuid4().hex[:12]
+            self._execution_context.current_task_id = str((resume_checkpoint or {}).get("task_id") or uuid.uuid4().hex[:12])
+            checkpoint_task_id = self._execution_context.current_task_id
             self._execution_context.current_task_objective = (history_user_text or user_text)[:700]
             if not is_background_task:
                 self._foreground_cancel_event = run_cancel_event
@@ -5568,7 +5838,10 @@ CWD: {current_dir}
             except Exception as e:
                 logging.warning(f"Critical memory capture skipped: {e}")
 
-            self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
+            if resume_checkpoint:
+                self.system_prompt = str(resume_checkpoint.get("system_prompt") or getattr(self, "system_prompt", "") or self._load_system_prompt(user_text, log_memory_usage=True))
+            else:
+                self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
             try:
                 configured_iterations = int(self.settings.get("max_agent_loops", 15))
             except Exception:
@@ -5582,20 +5855,68 @@ CWD: {current_dir}
             task_started = time.time()
             total_timeout = self._timeout("max_total_task_seconds", 900)
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
+            if resume_checkpoint:
+                current_model = str(resume_checkpoint.get("current_model") or current_model)
+                try:
+                    iteration = max(0, int(resume_checkpoint.get("iteration", 0) or 0))
+                except Exception:
+                    iteration = 0
+                if str(resume_checkpoint.get("phase") or "") == "model_request":
+                    iteration = max(0, iteration - 1)
+                saved_counts = resume_checkpoint.get("tool_call_counts", {})
+                tool_call_counts = dict(saved_counts) if isinstance(saved_counts, dict) else {}
+                saved_signatures = resume_checkpoint.get("similar_tool_signatures", [])
+                similar_tool_signatures = list(saved_signatures) if isinstance(saved_signatures, list) else []
+                schemas_seen = set(str(item) for item in resume_checkpoint.get("schemas_seen", []) or [])
+                try:
+                    internal_artifact_replies = max(0, int(resume_checkpoint.get("internal_artifact_replies", 0) or 0))
+                except Exception:
+                    internal_artifact_replies = 0
+                try:
+                    tool_observation_start = max(0, int(resume_checkpoint.get("tool_observation_start", tool_observation_start) or tool_observation_start))
+                except Exception:
+                    pass
 
             logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
             if getattr(self, "agent_runtime", None):
                 self.agent_runtime.trace("plan", (history_user_text or user_text)[:1000])
 
-            task_state = self._initialize_direct_task_state(history_user_text or user_text)
+            if resume_checkpoint and isinstance(resume_checkpoint.get("task_state"), dict):
+                task_state = copy.deepcopy(resume_checkpoint.get("task_state") or {})
+            else:
+                task_state = self._initialize_direct_task_state(history_user_text or user_text)
 
-            if self.mode == "gemini":
+            if resume_checkpoint and isinstance(resume_checkpoint.get("current_messages"), list):
+                current_messages = copy.deepcopy(resume_checkpoint.get("current_messages") or [])
+            elif self.mode == "gemini":
                 current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
                 current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
             else:
                 history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
                 current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
                 current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
+
+            def checkpoint(phase, status="running", reason=""):
+                return self._save_active_task_checkpoint(
+                    user_text=user_text,
+                    history_user_text=history_user_text,
+                    attachments=attachments,
+                    current_messages=current_messages,
+                    iteration=iteration,
+                    task_state=task_state,
+                    tool_call_counts=tool_call_counts,
+                    similar_tool_signatures=similar_tool_signatures,
+                    schemas_seen=schemas_seen,
+                    internal_artifact_replies=internal_artifact_replies,
+                    current_model=current_model,
+                    tool_observation_start=tool_observation_start,
+                    phase=phase,
+                    status=status,
+                    reason=reason,
+                    is_background_task=is_background_task,
+                )
+
+            checkpoint("resume_ready" if resume_checkpoint else "ready")
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
                 if run_cancel_event.is_set():
@@ -5614,15 +5935,20 @@ CWD: {current_dir}
                 try:
                     if getattr(self, "agent_runtime", None):
                         self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
+                    checkpoint("model_request")
                     ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
                     self._log_usage(current_model, usage_dict)
                     logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
                 except Exception as e:
                     if "TIMEOUT" in str(e):
+                        checkpoint_should_keep = True
                         final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
                     elif isinstance(e, ApiRequestError):
+                        checkpoint_should_keep = e.analysis.category in {"network", "timeout"}
+                        if checkpoint_should_keep:
+                            checkpoint("network_paused", status="paused_network", reason=e.analysis.category)
                         final_response = self._api_error_user_response(e.analysis)
                     elif self._is_budget_exception(e):
                         final_response = self._budget_exception_user_message(e)
@@ -5660,6 +5986,7 @@ CWD: {current_dir}
                                 pass
                         logging.warning(feedback_for_ai)
                         self._append_tool_feedback(current_messages, tool_turn_text, "tool_parser", feedback_for_ai or "ERROR: Invalid tool call.")
+                        checkpoint("tool_parser_feedback")
                         continue
 
                     if first_call.get("action") == "agent_planner":
@@ -5682,6 +6009,7 @@ CWD: {current_dir}
                                 "בחר עכשיו את הפעולה הבאה לפי התוכנית."
                             )
                         self._compact_current_messages_if_needed(current_messages, task_state, iteration)
+                        checkpoint("planner_feedback")
                         continue
 
                     selected_calls = [first_call]
@@ -5727,6 +6055,7 @@ CWD: {current_dir}
                             break
                     if reserve_feedback:
                         self._append_tool_feedback(current_messages, tool_turn_text, selected_calls[0].get("action", "tool"), reserve_feedback)
+                        checkpoint("tool_reserve_feedback")
                         continue
                     tool_call_counts = candidate_tool_call_counts
                     similar_tool_signatures = candidate_similar_tool_signatures
@@ -5751,6 +6080,7 @@ CWD: {current_dir}
                             else:
                                 self.status_callback(f"מפעיל כלי: {action}...")
 
+                    checkpoint("tool_execution", reason=",".join(str(call.get("action", "")) for call in selected_calls))
                     try:
                         results = self._execute_tool_call_batch(selected_calls, schemas_seen, parallel=parallel)
                     except SmartiCancelled:
@@ -5761,6 +6091,7 @@ CWD: {current_dir}
                         for result in results:
                             self.agent_runtime.trace("observe", f"{result.get('action')}: {str(result.get('output') or '')[:1200]}")
                     self._record_results_in_task_state(task_state, results)
+                    checkpoint("tool_results_observed")
 
                     if any(result.get("feedback") for result in results):
                         if self.status_callback:
@@ -5777,6 +6108,7 @@ CWD: {current_dir}
                         if evaluator_feedback:
                             self._append_user_feedback_message(current_messages, evaluator_feedback)
                         self._compact_current_messages_if_needed(current_messages, task_state, iteration)
+                        checkpoint("tool_results_feedback")
                         continue
 
                     final_messages = [result.get("message") for result in results if result.get("message")]
@@ -5809,6 +6141,7 @@ CWD: {current_dir}
                             "ERROR: התגובה האחרונה חשפה פלט כלי/הנחיות פנימיות. אסור להציג למשתמש [UNTRUSTED_*], SKILL_* או tools/call. "
                             "ענה עכשיו בעברית פשוטה בתשובה סופית קצרה שמבוססת רק על תצפיות הכלים, בלי תגים פנימיים."
                         )
+                        checkpoint("internal_artifact_feedback")
                         continue
                     final_response = ai_response_text.replace("##", "").strip()
                     logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
@@ -5863,9 +6196,11 @@ CWD: {current_dir}
                 final_response = self._budget_exception_user_message(e)
                 return final_response
             if isinstance(e, ApiRequestError):
+                checkpoint_should_keep = e.analysis.category in {"network", "timeout"}
                 final_response = self._api_error_user_response(e.analysis)
                 return final_response
             logging.exception("Agent loop crashed unexpectedly inside send_message.")
+            checkpoint_should_keep = True
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
             return final_response
         finally:
@@ -5875,6 +6210,8 @@ CWD: {current_dir}
                     chat_turn_recorded = True
                 except Exception as e:
                     logging.warning(f"Chat turn persistence failed: {e}")
+            if not is_background_task and checkpoint_task_id and not checkpoint_should_keep:
+                self._clear_task_checkpoint(checkpoint_task_id)
             if self.status_callback:
                 self.status_callback("")
             if getattr(self, "agent_runtime", None):

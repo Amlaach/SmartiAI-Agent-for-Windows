@@ -88,10 +88,13 @@ URL_MISTRAL = "aHR0cHM6Ly9hcGkubWlzdHJhbC5haS92MQ=="
 URL_TOGETHER = "aHR0cHM6Ly9hcGkudG9nZXRoZXIuYWkvdjE="
 URL_PERPLEXITY = "aHR0cHM6Ly9hcGkucGVycGxleGl0eS5haQ=="
 URL_XAI = "aHR0cHM6Ly9hcGkueC5haS92MQ=="
+URL_NVIDIA = "aHR0cHM6Ly9pbnRlZ3JhdGUuYXBpLm52aWRpYS5jb20vdjE="
+URL_CEREBRAS = "aHR0cHM6Ly9hcGkuY2VyZWJyYXMuYWkvdjE="
+URL_HUGGINGFACE = "aHR0cHM6Ly9yb3V0ZXIuaHVnZ2luZ2ZhY2UuY28vdjE="
 URL_CLAWHUB_API = "aHR0cHM6Ly9jbGF3aHViLmFpL2FwaS92MQ=="
 
 MODEL_PROVIDER_ORDER = [
-    "gemini", "openai", "anthropic", "openrouter", "groq",
+    "gemini", "openai", "anthropic", "openrouter", "groq", "nvidia", "cerebras", "huggingface",
     "deepseek", "qwen", "zhipu", "moonshot", "mistral",
     "together", "perplexity", "xai", "local"
 ]
@@ -142,6 +145,46 @@ MODEL_PROVIDER_CONFIGS = {
         "key_instructions": "התחבר ל-Groq Console, לחץ Create API Key והעתק את המפתח.",
         "default_model": "openai/gpt-oss-120b",
         "base_url": URL_GROQ,
+    },
+    "nvidia": {
+        "label": "NVIDIA NIM",
+        "kind": "openai_compatible",
+        "secret_key": "nvidia_api_key",
+        "help_url": "https://build.nvidia.com/nvidia/",
+        "key_instructions": "התחבר ל-NVIDIA Build, פתח מודל ב-Hosted API ולחץ Generate API Key, ואז העתק את המפתח.",
+        "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1",
+        "base_url": URL_NVIDIA,
+        "fallback_models": [
+            "nvidia/llama-3.3-nemotron-super-49b-v1",
+            "nvidia/llama-3.1-nemotron-nano-8b-v1",
+            "nvidia/nemotron-3-nano-30b-a3b",
+            "deepseek-ai/deepseek-v4-pro",
+        ],
+    },
+    "cerebras": {
+        "label": "Cerebras",
+        "kind": "openai_compatible",
+        "secret_key": "cerebras_api_key",
+        "help_url": "https://cloud.cerebras.ai/",
+        "key_instructions": "התחבר ל-Cerebras Cloud, פתח API Keys, צור מפתח חדש והעתק אותו.",
+        "default_model": "gpt-oss-120b",
+        "base_url": URL_CEREBRAS,
+        "fallback_models": ["gpt-oss-120b", "zai-glm-4.7"],
+    },
+    "huggingface": {
+        "label": "Hugging Face",
+        "kind": "openai_compatible",
+        "secret_key": "huggingface_api_key",
+        "help_url": "https://huggingface.co/settings/tokens",
+        "key_instructions": "התחבר ל-Hugging Face, פתח Settings > Access Tokens, צור User Access Token והעתק אותו.",
+        "default_model": "openai/gpt-oss-120b",
+        "base_url": URL_HUGGINGFACE,
+        "fallback_models": [
+            "openai/gpt-oss-120b",
+            "deepseek-ai/DeepSeek-R1:fastest",
+            "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        ],
     },
     "deepseek": {
         "label": "DeepSeek",
@@ -319,6 +362,7 @@ USAGE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage.json")
 MEMORY_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.json")
 MEMORY_EXPORT_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.md")
 CHAT_HISTORY_FILE = os.path.join(USER_DATA_DIR, "smarti_chats.json")
+ACTIVE_TASK_CHECKPOINT_FILE = os.path.join(USER_DATA_DIR, "active_task_checkpoint.json")
 TOOLS_DIR = os.path.join(USER_DATA_DIR, "custom_tools")
 MCP_TOOLS_DIR = os.path.join(USER_DATA_DIR, "mcp_tools")
 SKILLS_DIR = os.path.join(USER_DATA_DIR, "skills")
