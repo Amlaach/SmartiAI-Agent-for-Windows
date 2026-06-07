@@ -1310,6 +1310,10 @@ class MessageBubble(QFrame):
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
+    ACTION_BUTTON_SIZE = 40
+    ACTION_ICON_SIZE = 24
+    ACTION_ROW_HEIGHT = 44
+
     def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
@@ -1346,26 +1350,26 @@ class ChatMessageContainer(QWidget):
 
         self.actions_container = QWidget()
         self.actions_container.setMouseTracking(True)
-        self.actions_container.setFixedHeight(28)
+        self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
         self.actions_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.actions_container.setStyleSheet("background: transparent;")
         actions_layout = QHBoxLayout(self.actions_container)
         actions_layout.setContentsMargins(12, 0, 12, 0)
-        actions_layout.setSpacing(4)
+        actions_layout.setSpacing(6)
 
         self.copy_btn = None
         if self.show_actions:
             self.copy_btn = QPushButton()
-            self.copy_btn.setFixedSize(24, 24)
+            self.copy_btn.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
             self.copy_btn.setToolTip("העתק")
             self.copy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            set_themed_button_icon(self.copy_btn, ("copy_icon",), "⧉", 15, clear_text=True)
+            set_themed_button_icon(self.copy_btn, ("copy_icon",), "⧉", self.ACTION_ICON_SIZE, clear_text=True)
             self.copy_btn.clicked.connect(self.copy_message_text)
 
         self.user_collapse_btn = None
         if self.show_actions and is_user:
             self.user_collapse_btn = QPushButton()
-            self.user_collapse_btn.setFixedSize(24, 24)
+            self.user_collapse_btn.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
             self.user_collapse_btn.setToolTip("הרחב הודעה")
             self.user_collapse_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.user_collapse_btn.clicked.connect(self.toggle_user_message_collapse)
@@ -1374,7 +1378,7 @@ class ChatMessageContainer(QWidget):
         self.tts_btn = None
         if self.show_actions and not is_user:
             self.tts_btn = QPushButton()
-            self.tts_btn.setFixedSize(24, 24)
+            self.tts_btn.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
             self.tts_btn.setToolTip("Read aloud")
             self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
@@ -1413,9 +1417,10 @@ class ChatMessageContainer(QWidget):
         color = DANGER_COLOR if active else MUTED_TEXT_COLOR
         hover = "rgba(240,90,110,0.16)" if active else ACCENT_TINT
         pressed = "rgba(240,90,110,0.24)" if active else ACCENT_TINT_STRONG
+        radius = max(1, int(self.ACTION_BUTTON_SIZE / 2))
         return (
             f"QPushButton {{ background: transparent; color: {color}; border: none; "
-            f"padding: 0px; border-radius: 12px; font-size: 13px; font-weight: 700; }}"
+            f"padding: 0px; border-radius: {radius}px; font-size: 15px; font-weight: 700; }}"
             f"QPushButton:hover {{ background: {hover}; color: {TEXT_COLOR}; }}"
             f"QPushButton:pressed {{ background: {pressed}; }}"
             f"QPushButton:disabled {{ background: transparent; color: {SUBTLE_TEXT_COLOR}; }}"
@@ -1439,7 +1444,7 @@ class ChatMessageContainer(QWidget):
             return
         if collapsed is None:
             _, collapsed = self.bubble.user_collapse_state()
-        icon_size = 15
+        icon_size = self.ACTION_ICON_SIZE
         icon_names = (
             "message_collapse_arrow_icon",
             "message_collapse_arrow",
@@ -1475,7 +1480,7 @@ class ChatMessageContainer(QWidget):
             if active else
             ("read_aloud_icon", "speaker_icon", "tts_icon")
         )
-        set_themed_button_icon(self.tts_btn, icon_names, "X" if active else "A", 15, clear_text=True)
+        set_themed_button_icon(self.tts_btn, icon_names, "X" if active else "A", self.ACTION_ICON_SIZE, clear_text=True)
         self.tts_btn.setToolTip("Stop reading" if active else "Read aloud")
         self.tts_btn.setStyleSheet(self._button_css(active))
 
