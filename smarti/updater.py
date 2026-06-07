@@ -249,12 +249,43 @@ Get-Process -Name 'SmartiAI' -ErrorAction SilentlyContinue | Where-Object {{ $_.
     Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
 }}
 Write-UpdateLog "Starting installer: $installer"
-$args = @('/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS')
+$args = @('/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/MERGETASKS=!desktopicon')
 $setup = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
 Write-UpdateLog "Installer exit code: $($setup.ExitCode)"
-if (($null -eq $setup.ExitCode -or $setup.ExitCode -eq 0) -and (Test-Path -LiteralPath $appExe)) {{
-    Write-UpdateLog "Relaunching SmartiAI: $appExe"
-    Start-Process -FilePath $appExe
+function Add-LaunchCandidate([System.Collections.Generic.List[string]]$items, [string]$path) {{
+    if ([string]::IsNullOrWhiteSpace($path)) {{ return }}
+    if (-not $items.Contains($path)) {{ $items.Add($path) | Out-Null }}
+}}
+function Resolve-SmartiExe {{
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($key in @(
+        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}}_is1',
+        'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}}_is1',
+        'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}}_is1'
+    )) {{
+        $entry = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+        if ($entry -and $entry.InstallLocation) {{
+            Add-LaunchCandidate $candidates (Join-Path $entry.InstallLocation 'SmartiAI.exe')
+        }}
+    }}
+    Add-LaunchCandidate $candidates $appExe
+    if ($env:LOCALAPPDATA) {{
+        Add-LaunchCandidate $candidates (Join-Path $env:LOCALAPPDATA 'SmartiAI\\SmartiAI.exe')
+        Add-LaunchCandidate $candidates (Join-Path $env:LOCALAPPDATA 'Programs\\SmartiAI\\SmartiAI.exe')
+    }}
+    foreach ($candidate in $candidates) {{
+        if (Test-Path -LiteralPath $candidate) {{ return $candidate }}
+    }}
+    return $appExe
+}}
+if ($null -eq $setup.ExitCode -or $setup.ExitCode -eq 0 -or $setup.ExitCode -eq 3010) {{
+    $resolvedAppExe = Resolve-SmartiExe
+    if (Test-Path -LiteralPath $resolvedAppExe) {{
+        Write-UpdateLog "Relaunching SmartiAI: $resolvedAppExe"
+        Start-Process -FilePath $resolvedAppExe -WorkingDirectory (Split-Path -Parent $resolvedAppExe)
+    }} else {{
+        Write-UpdateLog "SmartiAI relaunch skipped; executable was not found. Last candidate: $resolvedAppExe"
+    }}
 }}
 """
     with open(script_path, "w", encoding="utf-8-sig") as f:

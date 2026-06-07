@@ -9,6 +9,7 @@ from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
+from PyQt6.QtGui import QTextDocument
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
@@ -1833,15 +1834,178 @@ class ChatHistoryPage(QWidget):
                 self.main_window.load_active_chat_session()
             self.load_sessions()
 
+
+def _fit_dialog_to_parent(dialog, parent=None, min_size=(340, 260), max_size=(620, 640)):
+    parent = parent or dialog.parentWidget()
+    bounds = None
+    try:
+        if parent is not None:
+            bounds = parent.frameGeometry()
+    except Exception:
+        bounds = None
+    if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        bounds = screen.availableGeometry() if screen else None
+    if bounds is None:
+        dialog.resize(*max_size)
+        return
+
+    margin = 16
+    available_w = max(1, int(bounds.width()) - margin * 2)
+    available_h = max(1, int(bounds.height()) - margin * 2)
+    min_w = min(int(min_size[0]), available_w)
+    min_h = min(int(min_size[1]), available_h)
+    target_w = max(min_w, min(int(max_size[0]), available_w))
+    target_h = max(min_h, min(int(max_size[1]), available_h))
+
+    dialog.setMinimumSize(min_w, min_h)
+    dialog.setMaximumSize(max(min_w, available_w), max(min_h, available_h))
+    dialog.resize(target_w, target_h)
+
+    x = int(bounds.x()) + max(margin, (int(bounds.width()) - target_w) // 2)
+    y = int(bounds.y()) + max(margin, (int(bounds.height()) - target_h) // 2)
+    right_limit = int(bounds.x()) + int(bounds.width()) - target_w - margin
+    bottom_limit = int(bounds.y()) + int(bounds.height()) - target_h - margin
+    if right_limit >= int(bounds.x()) + margin:
+        x = min(max(x, int(bounds.x()) + margin), right_limit)
+    if bottom_limit >= int(bounds.y()) + margin:
+        y = min(max(y, int(bounds.y()) + margin), bottom_limit)
+    dialog.move(x, y)
+
+
+def _style_release_note_images(rendered_html):
+    def repl(match):
+        attrs = (match.group(1) or "").strip()
+        if attrs.endswith("/"):
+            attrs = attrs[:-1].rstrip()
+        lower = attrs.lower()
+        attrs = f" {attrs}" if attrs else ""
+        if "style=" not in lower:
+            attrs += (
+                f' style="max-width:100%; height:auto; border:1px solid {SOFT_LINE_COLOR}; '
+                'border-radius:8px; margin:8px 0;"'
+            )
+        if "alt=" not in lower:
+            attrs += ' alt=""'
+        return f"<img{attrs}>"
+    return re.sub(r"<img\b([^>]*)>", repl, str(rendered_html or ""), flags=re.IGNORECASE)
+
+
+class ReleaseNotesBrowser(QTextBrowser):
+    def __init__(self, settings=None, parent=None):
+        super().__init__(parent)
+        self._request_settings = dict(settings or {})
+        self._image_cache = {}
+        option = self.document().defaultTextOption()
+        option.setTextDirection(Qt.LayoutDirection.RightToLeft)
+        option.setAlignment(Qt.AlignmentFlag.AlignRight)
+        option.setWrapMode(QTextOption.WrapMode.WordWrap)
+        self.document().setDefaultTextOption(option)
+
+    def set_release_html(self, html_text, base_url=""):
+        self._image_cache.clear()
+        if base_url:
+            self.document().setBaseUrl(QUrl(str(base_url)))
+        self.setHtml(html_text)
+
+    def loadResource(self, resource_type, name):
+        image_type = QTextDocument.ResourceType.ImageResource
+        resource_value = getattr(resource_type, "value", resource_type)
+        image_value = getattr(image_type, "value", image_type)
+        if resource_type == image_type or resource_value == image_value:
+            try:
+                url = name if isinstance(name, QUrl) else QUrl(str(name))
+                if url.isRelative():
+                    url = self.document().baseUrl().resolved(url)
+                if url.scheme().lower() in {"http", "https"}:
+                    url_text = url.toString()
+                    if url_text in self._image_cache:
+                        return self._image_cache[url_text]
+                    kwargs = ssl_request_kwargs(bool(self._request_settings.get("allow_insecure_ssl_compat", True)))
+                    kwargs["timeout"] = (5, 25)
+                    response = requests.get(
+                        url_text,
+                        headers={"User-Agent": f"{SMARTI_APP_DISPLAY_NAME}/{APP_VERSION}"},
+                        **kwargs,
+                    )
+                    response.raise_for_status()
+                    image = QImage()
+                    if image.loadFromData(response.content):
+                        max_width = int(self.viewport().width()) - 28
+                        if max_width >= 240 and image.width() > max_width:
+                            image = image.scaledToWidth(max_width, Qt.TransformationMode.SmoothTransformation)
+                        self._image_cache[url_text] = image
+                        return image
+            except Exception as exc:
+                logging.debug("Failed to load release note image %s: %s", name, exc)
+        return super().loadResource(resource_type, name)
+
+
+class UpdateNoticeDialog(QDialog):
+    def __init__(self, title, message, parent=None, tone="info"):
+        super().__init__(parent)
+        self.setWindowTitle(str(title or "עדכונים"))
+        self.setModal(True)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setStyleSheet(dialog_stylesheet())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        icon = QLabel("!" if tone == "warning" else "✓")
+        icon.setFixedSize(38, 38)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_color = DANGER_COLOR if tone == "warning" else ACCENT_COLOR
+        icon.setStyleSheet(
+            f"QLabel {{ background: {ACCENT_TINT}; color: {icon_color}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 19px; font-size: 20px; font-weight: 900; }}"
+        )
+        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(5)
+        title_lbl = QLabel(str(title or "עדכונים"))
+        title_lbl.setWordWrap(True)
+        title_lbl.setStyleSheet(page_title_css(18))
+        text_col.addWidget(title_lbl)
+        message_lbl = QLabel(str(message or ""))
+        message_lbl.setWordWrap(True)
+        message_lbl.setStyleSheet(muted_label_css(13))
+        text_col.addWidget(message_lbl)
+        header.addLayout(text_col, 1)
+        layout.addLayout(header)
+
+        actions = QHBoxLayout()
+        actions.addStretch()
+        close_btn = QPushButton("סגור")
+        close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        close_btn.setMinimumWidth(112)
+        close_btn.setMinimumHeight(42)
+        close_btn.setStyleSheet(PRIMARY_BUTTON_CSS if tone != "warning" else SECONDARY_BUTTON_CSS)
+        close_btn.clicked.connect(self.accept)
+        actions.addWidget(close_btn)
+        layout.addLayout(actions)
+
+        _fit_dialog_to_parent(self, parent, min_size=(320, 210), max_size=(440, 260))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: _fit_dialog_to_parent(self, self.parentWidget(), min_size=(320, 210), max_size=(440, 260)))
+
+
 class UpdateDialog(QDialog):
     install_requested = pyqtSignal()
 
     def __init__(self, update_info, parent=None):
         super().__init__(parent)
         self.update_info = UpdateInfo.from_dict(update_info)
+        self._request_settings = dict(getattr(getattr(parent, "core", None), "settings", {}) or {})
         self.setWindowTitle("עדכון חדש לסמארטי")
         self.setModal(True)
-        self.setMinimumSize(420, 580)
+        self.setMinimumSize(340, 430)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         layout = QVBoxLayout(self)
@@ -1864,7 +2028,7 @@ class UpdateDialog(QDialog):
         notes_title.setStyleSheet(section_title_css(15))
         layout.addWidget(notes_title)
 
-        self.notes_browser = QTextBrowser()
+        self.notes_browser = ReleaseNotesBrowser(self._request_settings, self)
         self.notes_browser.setOpenExternalLinks(True)
         self.notes_browser.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.notes_browser.setStyleSheet(
@@ -1875,11 +2039,17 @@ class UpdateDialog(QDialog):
             f"{SCROLLBAR_CSS}"
         )
         notes = self.update_info.release_notes.strip() or "לא צורפו הערות שחרור לגרסה הזו."
-        notes_html = _render_markdown_html(notes, ACCENT_COLOR, style_blocks=True, clickable_links=True)
-        self.notes_browser.setHtml(
-            "<html><body dir='auto' style=\"font-family:'Segoe UI'; font-size:13px;\">"
+        notes_html = _style_release_note_images(_render_markdown_html(notes, ACCENT_COLOR, style_blocks=True, clickable_links=True))
+        self.notes_browser.set_release_html(
+            "<html><head><style>"
+            f"body {{ direction: rtl; text-align: right; color: {TEXT_COLOR}; font-family: 'Segoe UI', Arial; font-size: 13px; }}"
+            "p, li { line-height: 1.45; } ul, ol { margin-right: 18px; padding-right: 18px; margin-left: 0; padding-left: 0; }"
+            "pre, code { direction: ltr; text-align: left; unicode-bidi: embed; }"
+            "img { max-width: 100%; height: auto; }"
+            "</style></head><body dir='rtl'>"
             f"{notes_html}"
-            "</body></html>"
+            "</body></html>",
+            self.update_info.html_url,
         )
         layout.addWidget(self.notes_browser, 1)
 
@@ -1910,13 +2080,21 @@ class UpdateDialog(QDialog):
         self.close_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.close_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         self.close_btn.clicked.connect(self.reject)
-        row.addWidget(self.close_btn)
-        row.addWidget(self.install_btn)
+        for button in (self.close_btn, self.install_btn):
+            button.setMinimumHeight(44)
+            button.setMinimumWidth(136)
+        row.addWidget(self.close_btn, 1)
+        row.addWidget(self.install_btn, 1)
         layout.addLayout(row)
 
         if not self.update_info.asset_url:
             self.install_btn.setEnabled(False)
             self.status_lbl.setText("לא נמצא קובץ התקנה מסוג Setup.exe בפוסט השחרור בגיטהאב.")
+        _fit_dialog_to_parent(self, parent, min_size=(340, 430), max_size=(620, 640))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: _fit_dialog_to_parent(self, self.parentWidget(), min_size=(340, 430), max_size=(620, 640)))
 
     def set_downloading(self):
         self.install_btn.setEnabled(False)
@@ -2228,7 +2406,7 @@ class ChatWindow(QMainWindow):
                 if source_widget and hasattr(source_widget, "finish_update_check"):
                     source_widget.finish_update_check("בדיקת עדכונים כבר מתבצעת.")
                 else:
-                    QMessageBox.information(self, "עדכונים", "בדיקת עדכונים כבר מתבצעת.")
+                    self.show_update_notice("בדיקת עדכונים", "בדיקת עדכונים כבר מתבצעת.")
             return
 
         self._update_check_source = source_widget
@@ -2263,6 +2441,10 @@ class ChatWindow(QMainWindow):
             self.update_check_worker = None
         worker.deleteLater()
 
+    def show_update_notice(self, title, message, tone="info"):
+        dialog = UpdateNoticeDialog(title, message, self, tone=tone)
+        dialog.exec()
+
     def _handle_update_found(self, info, manual=False):
         self.available_update = UpdateInfo.from_dict(info)
         self._record_update_check(self.available_update.version)
@@ -2277,13 +2459,13 @@ class ChatWindow(QMainWindow):
         self._refresh_update_button()
         self._finish_update_source("אין עדכון חדש.")
         if manual:
-            QMessageBox.information(self, "עדכונים", "אין עדכון חדש. סמארטי מעודכן.")
+            self.show_update_notice("סמארטי מעודכן", "אין עדכון חדש. הגרסה הנוכחית כבר מעודכנת.")
 
     def _handle_update_check_failed(self, message, manual=False):
         self._record_update_check(None)
         self._finish_update_source(f"שגיאה בבדיקת עדכונים: {message}")
         if manual:
-            QMessageBox.warning(self, "עדכונים", f"לא הצלחתי לבדוק עדכונים:\n{message}")
+            self.show_update_notice("בדיקת העדכונים נכשלה", f"לא הצלחתי לבדוק עדכונים:\n{message}", tone="warning")
 
     def _refresh_update_button(self):
         if not hasattr(self, "update_btn"):
@@ -2343,7 +2525,7 @@ class ChatWindow(QMainWindow):
         if dialog:
             dialog.set_error(message)
         else:
-            QMessageBox.warning(self, "עדכונים", f"לא הצלחתי להוריד את העדכון:\n{message}")
+            self.show_update_notice("הורדת העדכון נכשלה", f"לא הצלחתי להוריד את העדכון:\n{message}", tone="warning")
 
     def quit_for_update(self):
         self._quit_requested = True
@@ -2393,11 +2575,12 @@ class ChatWindow(QMainWindow):
         return (
             "QPushButton#UpdateButton {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});"
-            f"color: {ACCENT_TEXT_COLOR}; border: 2px solid {ACCENT_TEXT_COLOR}; border-radius: 22px;"
+            f"color: {ACCENT_TEXT_COLOR}; border: 2px solid {ACCENT_WARM_COLOR}; border-radius: 24px;"
             "font-size: 20px; font-weight: 900; padding: 0px;"
             "}"
             "QPushButton#UpdateButton:hover {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});"
+            f"border-color: {TEXT_COLOR};"
             "}"
             f"QPushButton#UpdateButton:pressed {{ background: {ACCENT_COLOR}; }}"
         )
@@ -2412,7 +2595,7 @@ class ChatWindow(QMainWindow):
     def _set_update_button_icon(self):
         if not hasattr(self, "update_btn"):
             return
-        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 24, clear_text=True)
+        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 26, clear_text=True)
 
     def _add_menu_action(self, text, callback, *icon_names):
         action = self.menu.addAction(text)
@@ -2588,11 +2771,11 @@ class ChatWindow(QMainWindow):
 
         self.update_btn = QPushButton("!")
         self.update_btn.setObjectName("UpdateButton")
-        self.update_btn.setFixedSize(44, 44)
+        self.update_btn.setFixedSize(48, 48)
         self.update_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.update_btn.setToolTip("יש עדכון חדש לסמארטי. לחץ להורדה והתקנה.")
         self.update_btn.setStyleSheet(self._update_button_stylesheet())
-        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 24, clear_text=True)
+        set_themed_button_icon(self.update_btn, ("update_icon", "download_update_icon", "download_icon", "reset_icon"), "!", 26, clear_text=True)
         apply_soft_shadow(self.update_btn, blur=26, y=7, alpha=72)
         self.update_btn.clicked.connect(self.show_update_dialog)
         self.update_btn.setVisible(False)

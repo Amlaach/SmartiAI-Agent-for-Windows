@@ -39,6 +39,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 AppMutex=SmartiAI-Agent-for-Windows
 CloseApplications=yes
 RestartApplications=no
+UsePreviousTasks=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -48,6 +49,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+Type: files; Name: "{autoprograms}\SmartiAI Agent for Windows.lnk"
+Type: files; Name: "{userdesktop}\SmartiAI Agent for Windows.lnk"; Tasks: desktopicon
+Type: files; Name: "{commondesktop}\SmartiAI Agent for Windows.lnk"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\SmartiAI"; ValueType: string; ValueName: "DisplayName"; ValueData: "SmartiAI"; Flags: uninsdeletekey
