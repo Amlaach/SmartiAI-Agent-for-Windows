@@ -376,6 +376,265 @@ class ActionConfirmDialog(QDialog):
             }}
         """
 
+class ToolDeleteConfirmDialog(QDialog):
+    def __init__(self, title, details, artifact_name="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setModal(True)
+        width, height = self._initial_size(parent)
+        self.setMinimumSize(min(340, width), min(280, height))
+        self.resize(width, height)
+        self.setStyleSheet(self._stylesheet())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(0)
+
+        card = QFrame()
+        card.setObjectName("ToolDeleteCard")
+        apply_soft_shadow(card, blur=24, y=7, alpha=38)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(9)
+        layout.addWidget(card)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+
+        icon = QLabel()
+        icon.setObjectName("ToolDeleteIcon")
+        icon.setFixedSize(36, 36)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_themed_label_icon(icon, ("delete_icon",), "X", 20)
+        header_row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        header_text = QVBoxLayout()
+        header_text.setSpacing(3)
+        eyebrow = QLabel("מחיקת פריט חיצוני")
+        eyebrow.setObjectName("ToolDeleteEyebrow")
+        header_text.addWidget(eyebrow)
+
+        header = QLabel(str(title or "מחיקת כלי"))
+        header.setObjectName("ToolDeleteTitle")
+        header.setWordWrap(True)
+        header_text.addWidget(header)
+
+        if artifact_name:
+            name_lbl = QLabel(str(artifact_name))
+            name_lbl.setObjectName("ToolDeleteName")
+            name_lbl.setWordWrap(True)
+            header_text.addWidget(name_lbl)
+
+        header_row.addLayout(header_text, 1)
+        card_layout.addLayout(header_row)
+
+        warning = QLabel("הפעולה תמחק קבצים ורישומי אמון/הפעלה של הפריט. אי אפשר לשחזר אותה מתוך סמארטי.")
+        warning.setObjectName("ToolDeleteWarning")
+        warning.setWordWrap(True)
+        card_layout.addWidget(warning)
+
+        details_title = QLabel("מה יימחק")
+        details_title.setObjectName("ToolDeleteSectionTitle")
+        card_layout.addWidget(details_title)
+
+        preview = QTextEdit()
+        preview.setObjectName("ToolDeleteDetails")
+        preview.setReadOnly(True)
+        preview.setMinimumHeight(105)
+        preview.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        preview.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        preview.setPlainText(str(details or ""))
+        preview.verticalScrollBar().setStyleSheet(SCROLLBAR_CSS)
+        preview.horizontalScrollBar().setStyleSheet(SCROLLBAR_CSS)
+        card_layout.addWidget(preview, 1)
+
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 2, 0, 0)
+        actions.setSpacing(8)
+        actions.addStretch()
+
+        self.reject_btn = QPushButton("בטל")
+        self.reject_btn.setObjectName("ToolDeleteCancelButton")
+        self.reject_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.reject_btn.setAutoDefault(False)
+        self.reject_btn.clicked.connect(self.reject)
+        actions.addWidget(self.reject_btn)
+
+        self.accept_btn = QPushButton("מחק")
+        self.accept_btn.setObjectName("ToolDeleteAcceptButton")
+        self.accept_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.accept_btn.setDefault(True)
+        self.accept_btn.setAutoDefault(True)
+        self.accept_btn.clicked.connect(self.accept)
+        actions.addWidget(self.accept_btn)
+
+        card_layout.addLayout(actions)
+        self.reject_btn.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_inside_parent_window()
+
+    def _parent_window(self):
+        parent = self.parent()
+        if parent is None:
+            return None
+        try:
+            return parent.window()
+        except Exception:
+            return parent
+
+    def _parent_bounds(self):
+        parent_window = self._parent_window()
+        if parent_window is None:
+            return None
+        try:
+            return parent_window.frameGeometry() if parent_window.isVisible() else parent_window.geometry()
+        except Exception:
+            return None
+
+    def _initial_size(self, parent):
+        width, height = 460, 360
+        if parent is None:
+            return width, height
+        try:
+            parent_window = parent.window()
+            parent_size = parent_window.size() if parent_window is not None else parent.size()
+            parent_w = int(parent_size.width())
+            parent_h = int(parent_size.height())
+            if parent_w > 0:
+                width = min(width, max(260, parent_w - 36))
+            if parent_h > 0:
+                height = min(height, max(240, parent_h - 36))
+        except Exception:
+            pass
+        return width, height
+
+    def _fit_inside_parent_window(self):
+        bounds = self._parent_bounds()
+        if bounds is None or bounds.width() <= 0 or bounds.height() <= 0:
+            return
+
+        margin = 12
+        max_width = max(240, int(bounds.width()) - (margin * 2))
+        max_height = max(220, int(bounds.height()) - (margin * 2))
+        if self.width() > max_width or self.height() > max_height:
+            self.resize(min(self.width(), max_width), min(self.height(), max_height))
+
+        x = bounds.x() + max(margin, (bounds.width() - self.width()) // 2)
+        y = bounds.y() + max(margin, (bounds.height() - self.height()) // 2)
+        min_x = bounds.x() + margin
+        min_y = bounds.y() + margin
+        max_x = bounds.x() + bounds.width() - self.width() - margin
+        max_y = bounds.y() + bounds.height() - self.height() - margin
+        if max_x >= min_x:
+            x = max(min_x, min(x, max_x))
+        if max_y >= min_y:
+            y = max(min_y, min(y, max_y))
+        self.move(x, y)
+
+    def _stylesheet(self):
+        return dialog_stylesheet() + f"""
+            QFrame#ToolDeleteCard {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END});
+                border: 1px solid rgba(240,90,110,0.34);
+                border-radius: 20px;
+            }}
+            QLabel#ToolDeleteIcon {{
+                background: rgba(240,90,110,0.16);
+                border: 1px solid rgba(240,90,110,0.38);
+                border-radius: 18px;
+            }}
+            QLabel#ToolDeleteEyebrow {{
+                color: {DANGER_COLOR};
+                font-size: 11px;
+                font-weight: 800;
+                background: transparent;
+            }}
+            QLabel#ToolDeleteTitle {{
+                color: {TEXT_COLOR};
+                font-size: 17px;
+                font-weight: 800;
+                background: transparent;
+            }}
+            QLabel#ToolDeleteName {{
+                color: {MUTED_TEXT_COLOR};
+                font-size: 12px;
+                font-weight: 700;
+                background: transparent;
+            }}
+            QLabel#ToolDeleteWarning {{
+                color: {DANGER_COLOR};
+                background: rgba(240,90,110,0.12);
+                border: 1px solid rgba(240,90,110,0.28);
+                border-radius: 12px;
+                padding: 8px 10px;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QLabel#ToolDeleteSectionTitle {{
+                color: {TEXT_COLOR};
+                font-size: 12px;
+                font-weight: 800;
+                background: transparent;
+            }}
+            QTextEdit#ToolDeleteDetails {{
+                background: {GLASS_COLOR};
+                color: {FIELD_TEXT_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 14px;
+                padding: 8px;
+                font-size: 12px;
+                selection-background-color: {ACCENT_TINT_STRONG};
+                selection-color: {TEXT_COLOR};
+            }}
+            QTextEdit#ToolDeleteDetails viewport {{
+                background: transparent;
+                color: {FIELD_TEXT_COLOR};
+            }}
+            QPushButton#ToolDeleteAcceptButton {{
+                background: rgba(240,90,110,0.18);
+                color: {DANGER_COLOR};
+                border: none;
+                border-radius: 16px;
+                padding: 9px 15px;
+                min-width: 88px;
+                font-size: 13px;
+                font-weight: 800;
+            }}
+            QPushButton#ToolDeleteAcceptButton:hover {{
+                background: rgba(240,90,110,0.26);
+            }}
+            QPushButton#ToolDeleteAcceptButton:pressed {{
+                background: rgba(240,90,110,0.34);
+                padding-top: 10px;
+                padding-bottom: 8px;
+            }}
+            QPushButton#ToolDeleteCancelButton {{
+                background: {ACCENT_TINT};
+                color: {TEXT_COLOR};
+                border: none;
+                border-radius: 16px;
+                padding: 9px 14px;
+                min-width: 74px;
+                font-size: 13px;
+                font-weight: 800;
+            }}
+            QPushButton#ToolDeleteCancelButton:hover {{
+                background: {HOVER_TINT};
+            }}
+            QPushButton#ToolDeleteCancelButton:pressed {{
+                background: {ACCENT_TINT_STRONG};
+                padding-top: 10px;
+                padding-bottom: 8px;
+            }}
+        """
+
 class ApiKeyRequiredDialog(QDialog):
     def __init__(self, secret_key, provider_label, title, message, help_url="", parent=None):
         super().__init__(parent)
@@ -863,7 +1122,7 @@ class ToolsSettingsPage(QWidget):
                     self.checkboxes[t_name] = cb
                     self.checkbox_kinds[t_name] = ("custom", t_name)
                     cb.stateChanged.connect(lambda _=None, key=t_name: self._apply_tool_checkbox(key))
-                    self.form.addRow(cb)
+                    self.form.addRow(self._external_artifact_row(cb, "custom", t_name))
                     
         if not has_custom:
             lbl_no_tools = QLabel("אין כלים חיצוניים מותקנים.")
@@ -887,7 +1146,7 @@ class ToolsSettingsPage(QWidget):
                     self.checkboxes[f"mcp_{t_name}"] = cb
                     self.checkbox_kinds[f"mcp_{t_name}"] = ("mcp", t_name)
                     cb.stateChanged.connect(lambda _=None, key=f"mcp_{t_name}": self._apply_tool_checkbox(key))
-                    self.form.addRow(cb)
+                    self.form.addRow(self._external_artifact_row(cb, "mcp", t_name))
                     
         if not has_mcp:
             lbl_no_mcp = QLabel("אין חבילות MCP מותקנות.")
@@ -908,7 +1167,10 @@ class ToolsSettingsPage(QWidget):
             self.checkboxes[key] = cb
             self.checkbox_kinds[key] = ("skill", name)
             cb.stateChanged.connect(lambda _=None, key=key: self._apply_tool_checkbox(key))
-            self.form.addRow(cb)
+            if spec.get("source") == "builtin":
+                self.form.addRow(cb)
+            else:
+                self.form.addRow(self._external_artifact_row(cb, "skill", name))
         if not has_skills:
             lbl_no_skills = QLabel("אין מיומנויות (Skills) מותקנות.")
             lbl_no_skills.setStyleSheet(muted_label_css(13))
@@ -919,6 +1181,83 @@ class ToolsSettingsPage(QWidget):
 
     def _tool_label(self, tool_name):
         return BUILTIN_TOOL_DISPLAY_LABELS.get(tool_name, str(tool_name).replace("_", " "))
+
+    def _external_artifact_row(self, checkbox, kind, name):
+        label_text = checkbox.text()
+        checkbox.setText("")
+        checkbox.setToolTip(label_text)
+        checkbox.setAccessibleName(f"הפעל {name}")
+        checkbox.setFixedWidth(60)
+        checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        row = QWidget()
+        row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        row.setStyleSheet("background: transparent;")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
+        delete_btn = QPushButton()
+        delete_btn.setFixedSize(30, 30)
+        delete_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        delete_btn.setToolTip("מחק לחלוטין")
+        delete_btn.setAccessibleName(f"מחק {name}")
+        delete_btn.setStyleSheet(icon_button_css(30, danger=True))
+        set_themed_button_icon(delete_btn, ("delete_icon",), "X", 17, clear_text=True)
+        delete_btn.clicked.connect(lambda _=False, k=kind, n=name: self.confirm_delete_external_artifact(k, n))
+        row_layout.addWidget(delete_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        label = QLabel(label_text)
+        label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setWordWrap(True)
+        label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; background: transparent;")
+        label.mousePressEvent = lambda event, cb=checkbox: (cb.toggle(), event.accept())
+        row_layout.addWidget(label, 1)
+        return row
+
+    def _artifact_kind_label(self, kind):
+        return {
+            "custom": "כלי Python מותאם",
+            "mcp": "חבילת MCP",
+            "skill": "Skill",
+        }.get(kind, "פריט חיצוני")
+
+    def _delete_confirmation_details(self, kind, name):
+        kind_label = self._artifact_kind_label(kind)
+        details = [
+            f"סוג: {kind_label}",
+            f"שם: {name}",
+            "",
+            "המחיקה תסיר את הפריט מהדיסק ותנקה את רישומי ההרשאות/אמון שלו מהגדרות סמארטי.",
+        ]
+        if kind == "custom":
+            details.append(f"תיקייה: {TOOLS_DIR}")
+        elif kind == "mcp":
+            details.append(f"תיקייה: {MCP_TOOLS_DIR}")
+            details.append("בנוסף ינוקו aliases, allowed packages וקובץ תצורת MCP.")
+        elif kind == "skill":
+            spec = (getattr(self.core, "skill_registry", {}) or {}).get(name, {})
+            details.append(f"תיקייה: {spec.get('path') or os.path.join(SKILLS_DIR, name)}")
+        details.append("")
+        details.append("לא ניתן לשחזר את הפריט מתוך סמארטי אחרי המחיקה.")
+        return "\n".join(details)
+
+    def confirm_delete_external_artifact(self, kind, name):
+        kind_label = self._artifact_kind_label(kind)
+        dlg = ToolDeleteConfirmDialog(
+            f"מחיקת {kind_label}",
+            self._delete_confirmation_details(kind, name),
+            artifact_name=name,
+            parent=self,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        result = self.core.delete_external_tool_artifact(kind, name)
+        if str(result).startswith("SUCCESS:"):
+            logging.info(f"SETTINGS | external_artifact_deleted | kind={kind} | name={name}")
+            QTimer.singleShot(0, self.main_window.show_tools_page)
+        else:
+            QMessageBox.warning(self, "שגיאה במחיקה", str(result))
 
     def _apply_tool_checkbox(self, name):
         cb = self.checkboxes.get(name)

@@ -66,10 +66,28 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "read_website": {
-        "description": "מחלץ טקסט מלא ונקי מדף אינטרנט ספציפי (לא לחיפוש כללי).",
+        "description": "Reads clean text from one URL or crawls a same-site website. Use mode=page for a single page, mode=crawl for whole-site reading.",
         "inputSchema": {
             "type": "object",
-            "properties": {"url": {"type": "string"}},
+            "properties": {
+                "url": {"type": "string", "description": "Starting URL."},
+                "mode": {"type": "string", "enum": ["page", "crawl"], "default": "page", "description": "page reads one URL. crawl follows same-site links and optional sitemap URLs."},
+                "max_pages": {"type": "integer", "default": 30, "description": "Maximum pages in crawl mode. Use 1 for a single page. Hard-capped internally."},
+                "max_depth": {"type": "integer", "default": 2, "description": "Maximum link depth from the start page in crawl mode."},
+                "max_total_chars": {"type": "integer", "default": 90000, "description": "Maximum total text characters returned across all pages."},
+                "max_page_chars": {"type": "integer", "default": 12000, "description": "Maximum text characters returned per page."},
+                "include_links": {"type": "boolean", "default": True, "description": "Include a compact discovered-link index."},
+                "max_links": {"type": "integer", "default": 80, "description": "Maximum discovered links to include in output."},
+                "same_domain": {"type": "boolean", "default": True, "description": "Restrict crawl to the starting domain."},
+                "include_subdomains": {"type": "boolean", "default": False, "description": "When same_domain is true, also allow subdomains."},
+                "include_patterns": {"type": "array", "items": {"type": "string"}, "description": "Optional regex or substring filters. URL must match one to be crawled."},
+                "exclude_patterns": {"type": "array", "items": {"type": "string"}, "description": "Optional regex or substring filters. Matching URLs are skipped."},
+                "respect_robots_txt": {"type": "boolean", "default": True, "description": "Respect robots.txt crawl rules when available."},
+                "use_sitemap": {"type": "boolean", "default": True, "description": "In crawl mode, seed the crawl with sitemap.xml URLs when available."},
+                "delay_seconds": {"type": "number", "default": 0.2, "description": "Polite delay between crawl requests."},
+                "timeout_seconds": {"type": "integer", "default": 20, "description": "HTTP timeout per request."},
+                "user_agent": {"type": "string", "description": "Optional custom User-Agent."}
+            },
             "required": ["url"]
         }
     },
@@ -456,7 +474,7 @@ BUILTIN_TOOL_SCHEMAS = {
 }
 
 BUILTIN_DYNAMIC_TOOLS = {
-    "read_website": "מחלץ טקסט מעמוד אינטרנט.",
+    "read_website": "קורא עמוד אינטרנט או זוחל אתר שלם בצורה מבוקרת.",
     "analyze_local_image": "ראייה ממוחשבת לקובץ מקומי.",
     "schedule_background_task": "תזמון פעולה מחזורית.",
     "list_background_tasks": "הצגת משימות רקע.",
@@ -594,6 +612,22 @@ BUILTIN_TOOL_SCHEMAS["web_manager"] = {
             "query": {"type": "string", "description": "Search query, browser query, or weather location."},
             "url": {"type": "string", "description": "URL for read/open."},
             "query_or_url": {"type": "string", "description": "Browser query or URL for open."},
+            "mode": {"type": "string", "enum": ["page", "crawl"], "description": "For action=read: page reads one URL; crawl reads multiple same-site pages."},
+            "max_pages": {"type": "integer", "description": "For action=read crawl mode: maximum pages to fetch. Default 30."},
+            "max_depth": {"type": "integer", "description": "For action=read crawl mode: maximum link depth. Default 2."},
+            "max_total_chars": {"type": "integer", "description": "For action=read: total returned text character budget. Default 90000."},
+            "max_page_chars": {"type": "integer", "description": "For action=read: character budget per page. Default 12000."},
+            "include_links": {"type": "boolean", "description": "For action=read: include discovered links. Default true."},
+            "max_links": {"type": "integer", "description": "For action=read: maximum discovered links in output. Default 80."},
+            "same_domain": {"type": "boolean", "description": "For action=read crawl mode: restrict to starting domain. Default true."},
+            "include_subdomains": {"type": "boolean", "description": "For action=read crawl mode: include subdomains. Default false."},
+            "include_patterns": {"type": "array", "items": {"type": "string"}, "description": "For action=read crawl mode: optional URL allow filters."},
+            "exclude_patterns": {"type": "array", "items": {"type": "string"}, "description": "For action=read crawl mode: optional URL deny filters."},
+            "respect_robots_txt": {"type": "boolean", "description": "For action=read crawl mode: respect robots.txt. Default true."},
+            "use_sitemap": {"type": "boolean", "description": "For action=read crawl mode: seed from sitemap.xml. Default true."},
+            "delay_seconds": {"type": "number", "description": "For action=read crawl mode: delay between requests. Default 0.2."},
+            "timeout_seconds": {"type": "integer", "description": "For action=read: HTTP timeout per request. Default 20."},
+            "user_agent": {"type": "string", "description": "For action=read: optional custom User-Agent."},
             "location": {"type": "string", "description": "Weather location."},
             "days": {"type": "integer", "description": "Weather forecast days, 1-7."},
             "units": {"type": "string", "enum": ["metric", "imperial"], "description": "Weather units."}
@@ -736,7 +770,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
     "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text, attach local files to context, trash-to-Recycle-Bin.",
-    "web_manager": "Unified web: search, read, open, weather.",
+    "web_manager": "Unified web: search, page/site read/crawl, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
     "notification_manager": "Unified Windows toasts, reminders, calendar events, Calendar/Clock/settings opening.",

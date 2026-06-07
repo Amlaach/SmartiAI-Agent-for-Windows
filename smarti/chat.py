@@ -2148,7 +2148,6 @@ class ChatWindow(QMainWindow):
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
-        name = re.sub(r'(?i)\bpreview\b', '', name)
         return " ".join(name.split())
 
     def active_chat_title(self):
