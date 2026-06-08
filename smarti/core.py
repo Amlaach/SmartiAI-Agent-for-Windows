@@ -4,6 +4,7 @@ from .config import *
 from .managers import *
 from .history import ChatSessionStore, DEFAULT_CHAT_TITLE
 from .attachments import *
+from .api_tracker import track_usage
 # Google Drive integration is parked until the OAuth flow is reliable for end users.
 # from .google_drive import GoogleDriveClient
 from .api_errors import (
@@ -5017,6 +5018,9 @@ class SmartiCore:
 
     def _log_usage(self, model_name, usage_dict):
         if not usage_dict or not model_name: return
+            
+        track_usage(model_name, usage_dict)
+        
         today = datetime.now().strftime('%Y-%m-%d')
         try:
             data = {}
