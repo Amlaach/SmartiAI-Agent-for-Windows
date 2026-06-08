@@ -1135,6 +1135,7 @@ class ExpandingTextEdit(QTextEdit):
         self.setFixedHeight(self.min_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.textChanged.connect(self._force_rtl_alignment)
+        self.textChanged.connect(lambda: QTimer.singleShot(0, self.adjust_height))
 
     def setPlaceholderText(self, text):
         self._placeholder_text = str(text or "")
@@ -1205,17 +1206,30 @@ class ExpandingTextEdit(QTextEdit):
     def clear(self):
         super().clear()
         self._force_rtl_alignment()
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.verticalScrollBar().setValue(self.verticalScrollBar().minimum())
+        self.setFixedHeight(self.min_height)
+        QTimer.singleShot(0, self.adjust_height)
         
     def adjust_height(self):
         doc_height = int(self.document().size().height())
         margins = self.contentsMargins()
         target_height = doc_height + margins.top() + margins.bottom()
         if target_height < self.min_height: target_height = self.min_height
-        elif target_height > self.max_height:
+        needs_scroll = target_height > self.max_height
+        if needs_scroll:
             target_height = self.max_height
-            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else: self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        desired_policy = (
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            if needs_scroll
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        if self.verticalScrollBarPolicy() != desired_policy:
+            self.setVerticalScrollBarPolicy(desired_policy)
+        if not needs_scroll:
+            self.verticalScrollBar().setValue(self.verticalScrollBar().minimum())
         if self.height() != target_height: self.setFixedHeight(target_height)
+        self.viewport().update()
             
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:

@@ -1003,6 +1003,8 @@ class MessageBubble(QFrame):
         self.final_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.final_label.setMaximumWidth(self.max_w)
         self.final_label.hide()
+        self.final_label.installEventFilter(self)
+        self._final_label_fade_effect = None
 
         self.final_content = QWidget()
         self.final_content.setStyleSheet("background: transparent; border: none;")
@@ -1027,6 +1029,11 @@ class MessageBubble(QFrame):
         else:
             self.final_label.hide()
         self.apply_theme()
+
+    def eventFilter(self, obj, event):
+        if obj is self.final_label and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            QTimer.singleShot(0, self._update_user_text_fade_mask)
+        return super().eventFilter(obj, event)
 
     def _link_color(self):
         if CURRENT_THEME == "light":
@@ -1128,6 +1135,47 @@ class MessageBubble(QFrame):
         metrics = QFontMetrics(self.final_label.font())
         return max(1, metrics.lineSpacing() * self.USER_COLLAPSED_LINES + 6)
 
+    def _user_text_fade_height(self):
+        metrics = QFontMetrics(self.final_label.font())
+        return min(self._user_collapsed_label_height(), max(40, metrics.lineSpacing() * 2 + 12))
+
+    def _clear_user_text_fade_mask(self):
+        if self._final_label_fade_effect is not None and self.final_label.graphicsEffect() is self._final_label_fade_effect:
+            self.final_label.setGraphicsEffect(None)
+        self._final_label_fade_effect = None
+
+    def _update_user_text_fade_mask(self):
+        show_fade = (
+            self.is_user
+            and self._user_message_collapsible
+            and self._user_message_collapsed
+            and self.final_label.isVisible()
+        )
+        if not show_fade:
+            self._clear_user_text_fade_mask()
+            return
+        label_height = max(1, self.final_label.height() or self._user_collapsed_label_height())
+        fade_height = min(label_height, self._user_text_fade_height())
+        fade_start = max(0.0, min(0.92, (label_height - fade_height) / label_height))
+        fade_mid = fade_start + ((1.0 - fade_start) * 0.58)
+
+        opaque = QColor(0, 0, 0, 255)
+        soft = QColor(0, 0, 0, 150)
+        faint = QColor(0, 0, 0, 36)
+        gradient = QLinearGradient(0, 0, 0, label_height)
+        gradient.setColorAt(0.0, opaque)
+        gradient.setColorAt(fade_start, opaque)
+        gradient.setColorAt(fade_mid, soft)
+        gradient.setColorAt(1.0, faint)
+
+        effect = self._final_label_fade_effect
+        if effect is None or self.final_label.graphicsEffect() is not effect:
+            effect = QGraphicsOpacityEffect(self.final_label)
+            effect.setOpacity(1.0)
+            self._final_label_fade_effect = effect
+            self.final_label.setGraphicsEffect(effect)
+        effect.setOpacityMask(QBrush(gradient))
+
     def _final_label_natural_height(self):
         label_text = str(self.final_label.text() or "").strip()
         if not label_text:
@@ -1162,13 +1210,16 @@ class MessageBubble(QFrame):
     def _apply_user_message_collapse_state(self):
         if not self._user_message_collapsible:
             self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
+            self._update_user_text_fade_mask()
             self.user_collapse_changed.emit(False, True)
             return
         self.final_label.setMaximumHeight(
             self._user_collapsed_label_height()
             if self._user_message_collapsed else self.WIDGET_MAX_HEIGHT
         )
+        self._update_user_text_fade_mask()
         self.user_collapse_changed.emit(True, self._user_message_collapsed)
+        QTimer.singleShot(0, self._update_user_text_fade_mask)
 
     def user_collapse_state(self):
         return self._user_message_collapsible, self._user_message_collapsed
@@ -1267,6 +1318,7 @@ class MessageBubble(QFrame):
             self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
             self._user_message_collapsible = False
             self._user_message_collapsed = True
+            self._update_user_text_fade_mask()
             self.user_collapse_changed.emit(False, True)
             for kind, content, language in parts:
                 if kind == "code":
